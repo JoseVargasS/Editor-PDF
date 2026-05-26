@@ -285,6 +285,10 @@ button:disabled {
   transform-origin: top left;
 }
 
+.pdf-page.is-preview-mode {
+  outline: 2px solid rgba(5, 150, 105, 0.35);
+}
+
 .page-bitmap {
   display: block;
   height: 100%;
@@ -294,6 +298,34 @@ button:disabled {
   position: absolute;
   width: 100%;
   z-index: 1;
+}
+
+.preview-banner {
+  align-items: center;
+  background: #0f172a;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  bottom: 16px;
+  box-shadow: var(--shadow);
+  color: #ffffff;
+  display: flex;
+  gap: 8px;
+  left: 50%;
+  padding: 8px 10px;
+  position: fixed;
+  transform: translateX(-50%);
+  z-index: 30;
+}
+
+.preview-banner button {
+  background: #ffffff;
+  border: 0;
+  border-radius: 4px;
+  color: #0f172a;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  padding: 5px 9px;
 }
 
 .text-box,

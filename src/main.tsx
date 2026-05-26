@@ -9,6 +9,7 @@ import {
   Minus,
   MousePointer2,
   Plus,
+  ScanEye,
   RotateCcw,
   Save,
   Square,
@@ -181,7 +182,7 @@ const API_PROXY = '/api'
 const API_DIRECT = 'http://127.0.0.1:8000/api'
 const AUTO_PREVIEW = false
 const PAGE_IMAGE_SCALE = 1.25
-const PREVIEW_SCALE = 1.35
+const PREVIEW_SCALE = 2
 const resizeHandles: ResizeHandle[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
 
 const tools: Array<{ id: Tool; label: string; icon: React.ComponentType<{ size?: number }> }> = [
@@ -363,6 +364,7 @@ function App() {
   const [pendingImage, setPendingImage] = useState<PendingImage | null>(null)
   const [apiBase, setApiBase] = useState(API_PROXY)
   const [previewImages, setPreviewImages] = useState<Record<number, string>>({})
+  const [previewMode, setPreviewMode] = useState(false)
   const [drag, setDrag] = useState<DragState>(null)
   const [inlineEditingId, setInlineEditingId] = useState<string | null>(null)
   const [isDraggingPdf, setIsDraggingPdf] = useState(false)
@@ -396,7 +398,7 @@ function App() {
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
-      if (inlineEditingId || tool !== 'select') {
+      if (previewMode || inlineEditingId || tool !== 'select') {
         return
       }
       const target = event.target as HTMLElement | null
@@ -425,7 +427,7 @@ function App() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [documentInfo, inlineEditingId, selected, selectedImage, selectedOperation, selectedText, tool])
+  }, [documentInfo, inlineEditingId, previewMode, selected, selectedImage, selectedOperation, selectedText, tool])
 
   useEffect(() => {
     if (!documentInfo) {
@@ -433,6 +435,7 @@ function App() {
         Object.values(current).forEach(URL.revokeObjectURL)
         return {}
       })
+      setPreviewMode(false)
       return
     }
 
@@ -634,12 +637,18 @@ function App() {
   }
 
   function selectText(span: TextSpan) {
+    if (previewMode) {
+      return
+    }
     commitTextEdit(getTextEdit(span))
     setSelected({ kind: 'text', id: span.id })
     setTool('select')
   }
 
   function beginInlineTextEdit(span: TextSpan, _page?: PageInfo) {
+    if (previewMode) {
+      return
+    }
     const edit = getTextEdit(span)
     commitTextEdit(edit)
     setSelected({ kind: 'text', id: span.id })
@@ -656,6 +665,7 @@ function App() {
   }
 
   function clearPreviewImages() {
+    setPreviewMode(false)
     setPreviewImages((current) => {
       if (!Object.keys(current).length) {
         return current
@@ -665,8 +675,60 @@ function App() {
     })
   }
 
+  function backToEditMode() {
+    setPreviewMode(false)
+    setMessage('Modo edicion')
+  }
+
+  async function renderFinalPreview() {
+    if (!documentInfo) {
+      return
+    }
+    setPreviewMode(false)
+    const currentOperations = buildOperations()
+    if (!currentOperations.length) {
+      clearPreviewImages()
+      setPreviewMode(false)
+      setMessage('No hay cambios para previsualizar')
+      return
+    }
+
+    setBusy(true)
+    setMessage('Generando preview final')
+    setInlineEditingId(null)
+    setSelected(null)
+    try {
+      const editedPages = Array.from(new Set(currentOperations.map((operation) => operation.pageIndex)))
+      const entries = await Promise.all(
+        editedPages.map(async (pageIndex) => {
+          const pageOperations = currentOperations.filter((operation) => operation.pageIndex === pageIndex)
+          const response = await fetch(`${apiBase}/documents/${documentInfo.id}/pages/${pageIndex}/preview?scale=${PREVIEW_SCALE}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ operations: pageOperations }),
+          })
+          if (!response.ok) {
+            throw new Error(`No se pudo previsualizar la pagina ${pageIndex + 1}`)
+          }
+          return [pageIndex, URL.createObjectURL(await response.blob())] as const
+        }),
+      )
+      setPreviewImages((current) => {
+        Object.values(current).forEach(URL.revokeObjectURL)
+        return Object.fromEntries(entries)
+      })
+      setPreviewMode(true)
+      setMessage('Preview final activo')
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'No se pudo generar preview')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   function revertTextEdit(id: string) {
     clearPreviewImages()
+    setPreviewMode(false)
     setTextEdits((current) => {
       const { [id]: _removed, ...rest } = current
       return rest
@@ -681,6 +743,7 @@ function App() {
 
   function revertImageEdit(id: string) {
     clearPreviewImages()
+    setPreviewMode(false)
     setImageEdits((current) => {
       const { [id]: _removed, ...rest } = current
       return rest
@@ -692,6 +755,7 @@ function App() {
 
   function revertOperation(id: string) {
     clearPreviewImages()
+    setPreviewMode(false)
     setOperations((current) => current.filter((operation) => operation.id !== id))
     if (selected?.kind === 'operation' && selected.id === id) {
       setSelected(null)
@@ -902,6 +966,9 @@ function App() {
   }
 
   function pagePointerDown(event: React.PointerEvent<HTMLDivElement>, page: PageInfo) {
+    if (previewMode) {
+      return
+    }
     if (!documentInfo || event.target !== event.currentTarget) {
       return
     }
@@ -948,6 +1015,9 @@ function App() {
   }
 
   function pagePointerMove(event: React.PointerEvent<HTMLDivElement>, page: PageInfo) {
+    if (previewMode) {
+      return
+    }
     if (!drag) {
       return
     }
@@ -1011,6 +1081,9 @@ function App() {
   }
 
   function pagePointerUp(event: React.PointerEvent<HTMLDivElement>, page: PageInfo) {
+    if (previewMode) {
+      return
+    }
     if (!drag) {
       return
     }
@@ -1120,6 +1193,9 @@ function App() {
     page: PageInfo,
     rect: Rect,
   ) {
+    if (previewMode) {
+      return null
+    }
     return resizeHandles.map((handle) => (
       <span
         className={`resize-handle resize-${handle}`}
@@ -1147,7 +1223,7 @@ function App() {
           </span>
         </div>
         <div
-          className="pdf-page"
+          className={`pdf-page ${previewMode ? 'is-preview-mode' : ''}`}
           style={pageStyle}
           onPointerDown={(event) => pagePointerDown(event, page)}
           onPointerMove={(event) => pagePointerMove(event, page)}
@@ -1164,7 +1240,7 @@ function App() {
             draggable={false}
             loading="lazy"
           />
-          {page.drawings.map((drawing) => (
+          {!previewMode && page.drawings.map((drawing) => (
             <button
               className={`drawing-box ${selected?.kind === 'drawing' && selected.id === drawing.id ? 'is-selected' : ''}`}
               key={drawing.id}
@@ -1176,7 +1252,7 @@ function App() {
               title="Vector"
             />
           ))}
-          {page.images.map((image) => {
+          {!previewMode && page.images.map((image) => {
             const edit = getImageEdit(image)
             const selectedImageBox = selected?.kind === 'image' && selected.id === image.id
             const imageChanged = edit.deleted || JSON.stringify(edit.rect) !== JSON.stringify(image.rect)
@@ -1216,7 +1292,7 @@ function App() {
               </div>
             )
           })}
-          {page.text.map((span) => {
+          {!previewMode && page.text.map((span) => {
             const edit = getTextEdit(span)
             const selectedSpan = selected?.kind === 'text' && selected.id === span.id
             const inlineEditing = inlineEditingId === span.id && !edit.deleted
@@ -1322,7 +1398,7 @@ function App() {
               </div>
             )
           })}
-          {operations
+          {!previewMode && operations
             .filter((operation) => operation.pageIndex === page.index)
             .map((operation) => {
               const selectedOperationBox = selected?.kind === 'operation' && selected.id === operation.id
@@ -1393,6 +1469,13 @@ function App() {
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      {previewMode ? (
+        <div className="preview-banner">
+          <ScanEye size={16} />
+          <span>Preview final</span>
+          <button onClick={backToEditMode}>Editar</button>
+        </div>
+      ) : null}
       {isDraggingPdf ? (
         <div className="drop-overlay">
           <FileUp size={34} />
@@ -1467,6 +1550,22 @@ function App() {
           <button className="tool-button" onClick={resetAll} disabled={!totalEdits} title="Reiniciar cambios">
             <RotateCcw size={18} />
           </button>
+          {previewMode ? (
+            <button className="tool-button command" onClick={backToEditMode} title="Volver a editar">
+              <MousePointer2 size={18} />
+              <span>Editar</span>
+            </button>
+          ) : (
+            <button
+              className="tool-button command"
+              onClick={renderFinalPreview}
+              disabled={!documentInfo || !totalEdits || busy}
+              title="Ver resultado final"
+            >
+              <ScanEye size={18} />
+              <span>Preview</span>
+            </button>
+          )}
           <button className="tool-button command primary" onClick={exportPdf} disabled={!documentInfo || busy} title="Exportar PDF">
             <Download size={18} />
             <span>Exportar</span>
