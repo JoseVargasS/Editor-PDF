@@ -179,7 +179,8 @@ type DragState =
 
 const API_PROXY = '/api'
 const API_DIRECT = 'http://127.0.0.1:8000/api'
-const PAGE_IMAGE_SCALE = 1.5
+const AUTO_PREVIEW = false
+const PAGE_IMAGE_SCALE = 1.25
 const PREVIEW_SCALE = 1.35
 const resizeHandles: ResizeHandle[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
 
@@ -437,10 +438,12 @@ function App() {
 
     const currentOperations = buildOperations()
     if (!currentOperations.length) {
-      setPreviewImages((current) => {
-        Object.values(current).forEach(URL.revokeObjectURL)
-        return {}
-      })
+      clearPreviewImages()
+      return
+    }
+
+    if (!AUTO_PREVIEW) {
+      clearPreviewImages()
       return
     }
 
@@ -652,7 +655,18 @@ function App() {
     setImageEdits((current) => ({ ...current, [edit.image.id]: edit }))
   }
 
+  function clearPreviewImages() {
+    setPreviewImages((current) => {
+      if (!Object.keys(current).length) {
+        return current
+      }
+      Object.values(current).forEach(URL.revokeObjectURL)
+      return {}
+    })
+  }
+
   function revertTextEdit(id: string) {
+    clearPreviewImages()
     setTextEdits((current) => {
       const { [id]: _removed, ...rest } = current
       return rest
@@ -666,6 +680,7 @@ function App() {
   }
 
   function revertImageEdit(id: string) {
+    clearPreviewImages()
     setImageEdits((current) => {
       const { [id]: _removed, ...rest } = current
       return rest
@@ -676,6 +691,7 @@ function App() {
   }
 
   function revertOperation(id: string) {
+    clearPreviewImages()
     setOperations((current) => current.filter((operation) => operation.id !== id))
     if (selected?.kind === 'operation' && selected.id === id) {
       setSelected(null)
@@ -1144,7 +1160,9 @@ function App() {
               `${apiBase}/documents/${documentInfo?.id}/pages/${page.index}/image?scale=${PAGE_IMAGE_SCALE}`
             }
             alt={`Pagina ${page.index + 1}`}
+            decoding="async"
             draggable={false}
+            loading="lazy"
           />
           {page.drawings.map((drawing) => (
             <button

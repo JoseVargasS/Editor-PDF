@@ -335,6 +335,8 @@ button:disabled {
 
 .text-box.is-changed .text-preview {
   background: rgba(255, 255, 255, 0.98);
+  box-decoration-break: clone;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.98);
 }
 
 .text-box.is-deleted,
