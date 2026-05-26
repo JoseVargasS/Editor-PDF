@@ -69,6 +69,50 @@ python -m py_compile server\app.py
 
 El script `npm run dev:all` levanta ambos procesos y los cierra juntos al presionar `Ctrl+C`.
 
+## Despliegue en Render
+
+La app se despliega en Render como un solo `Web Service` Docker. El Dockerfile compila React y despues arranca FastAPI sirviendo tanto `/api/...` como el frontend compilado.
+
+Archivos usados para despliegue:
+
+- `Dockerfile`: build multi-stage Node + Python.
+- `.dockerignore`: evita subir `node_modules`, `dist`, PDFs temporales y archivos locales.
+- `render.yaml`: configuracion opcional de Render Blueprint.
+
+Pasos recomendados:
+
+1. Sube este proyecto a GitHub.
+2. En Render, ve a `New` -> `Web Service`.
+3. Conecta el repositorio.
+4. Selecciona runtime `Docker` si Render no lo detecta automaticamente.
+5. Usa plan `Free` o el plan que prefieras.
+6. Confirma que el servicio use el `Dockerfile` de la raiz.
+7. Deploy.
+
+Render exige que los Web Services escuchen en `0.0.0.0` y en el puerto que indique la variable `PORT`. El `Dockerfile` ya arranca:
+
+```sh
+uvicorn server.app:app --host 0.0.0.0 --port ${PORT:-10000}
+```
+
+Cuando Render termine, la app quedara disponible en una URL tipo:
+
+```text
+https://editor-pdf.onrender.com
+```
+
+### Seguridad en internet
+
+Esta app procesa PDFs que pueden contener informacion sensible. Si la URL queda publica, cualquier persona con el enlace podria usar tu servicio. Para uso personal, lo recomendable es:
+
+- Mantener la URL privada.
+- No compartir el enlace.
+- Considerar agregar autenticacion simple antes de usarla con documentos sensibles en internet.
+
+### Persistencia en Render
+
+`.pdf_editor_storage/` es almacenamiento runtime. En Render Free el disco del contenedor puede ser efimero: si el servicio reinicia, los PDFs cargados pueden desaparecer. Esto esta bien para el flujo actual porque el usuario carga, edita y exporta en una misma sesion.
+
 ## Uso
 
 1. Ejecuta `npm run dev:all`.

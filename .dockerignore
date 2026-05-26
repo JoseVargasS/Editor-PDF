@@ -1,0 +1,9 @@
+node_modules
+dist
+.git
+.pdf_editor_storage
+__pycache__
+*.pyc
+*.log
+*.local
+.env

@@ -11,11 +11,13 @@ import fitz
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 
 ROOT = Path(__file__).resolve().parent.parent
 STORAGE = ROOT / ".pdf_editor_storage"
+DIST = ROOT / "dist"
 STORAGE.mkdir(exist_ok=True)
 
 app = FastAPI(title="Editor PDF API", version="0.1.0")
@@ -755,3 +757,20 @@ def export_document(document_id: str, request: ExportRequest) -> FileResponse:
         doc.close()
 
     return FileResponse(output_path(document_id), media_type="application/pdf", filename=f"editado-{document_id[:8]}.pdf")
+
+
+if (DIST / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=DIST / "assets"), name="assets")
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+def serve_frontend(full_path: str) -> FileResponse:
+    if full_path.startswith("api/"):
+        raise HTTPException(status_code=404, detail="Ruta API no encontrada")
+    requested = (DIST / full_path).resolve() if full_path else DIST / "index.html"
+    if full_path and requested.is_file() and requested.is_relative_to(DIST.resolve()):
+        return FileResponse(requested)
+    index = DIST / "index.html"
+    if index.exists():
+        return FileResponse(index)
+    raise HTTPException(status_code=404, detail="Frontend no compilado. Ejecuta npm run build.")

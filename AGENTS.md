@@ -13,6 +13,7 @@ Construir y mantener un editor PDF web local, enfocado en edicion visualmente fi
 - Backend: FastAPI + PyMuPDF en `server/app.py`.
 - Runtime temporal: `.pdf_editor_storage/`.
 - Script combinado: `scripts/dev-all.mjs`.
+- Despliegue: Docker en Render.
 
 ## Comandos importantes
 
@@ -26,6 +27,16 @@ python -m py_compile server\app.py
 
 No dejes servidores corriendo al finalizar una tarea, salvo que el usuario lo pida explicitamente. El usuario normalmente prefiere arrancar la app desde terminal.
 
+## Despliegue
+
+Render debe usar runtime Docker. El servicio arranca con:
+
+```sh
+uvicorn server.app:app --host 0.0.0.0 --port ${PORT:-10000}
+```
+
+El backend sirve el frontend compilado desde `dist/` cuando existe. No crear un Static Site separado salvo que tambien se configure un backend aparte; esta app necesita Python para analizar y exportar PDFs.
+
 ## Mapa de archivos
 
 - `src/main.tsx`: UI principal, estado de documento, boxes, seleccion, teclado, inspector, exportacion.
@@ -34,6 +45,9 @@ No dejes servidores corriendo al finalizar una tarea, salvo que el usuario lo pi
 - `scripts/dev-all.mjs`: levanta backend y frontend juntos.
 - `public/favicon.svg` / `public/favicon.ico`: icono local.
 - `README.md`: documentacion de uso y arquitectura.
+- `Dockerfile`: despliegue Docker para Render.
+- `.dockerignore`: excluye dependencias, build local y PDFs temporales.
+- `render.yaml`: Blueprint opcional para Render.
 
 ## Reglas de trabajo
 

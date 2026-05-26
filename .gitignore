@@ -11,6 +11,8 @@ node_modules
 dist
 dist-ssr
 .pdf_editor_storage/
+__pycache__/
+*.pyc
 *.local
 
 # Editor directories and files
