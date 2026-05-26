@@ -179,6 +179,7 @@ type DragState =
 
 const API_PROXY = '/api'
 const API_DIRECT = 'http://127.0.0.1:8000/api'
+const PREVIEW_SCALE = 1.35
 const resizeHandles: ResizeHandle[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
 
 const tools: Array<{ id: Tool; label: string; icon: React.ComponentType<{ size?: number }> }> = [
@@ -433,23 +434,43 @@ function App() {
       return
     }
 
-    const timer = window.setTimeout(() => {
-      const currentOperations = buildOperations()
-      if (!currentOperations.length) {
-        setPreviewImages((current) => {
-          Object.values(current).forEach(URL.revokeObjectURL)
-          return {}
-        })
-        return
-      }
+    const currentOperations = buildOperations()
+    if (!currentOperations.length) {
+      setPreviewImages((current) => {
+        Object.values(current).forEach(URL.revokeObjectURL)
+        return {}
+      })
+      return
+    }
 
-      const editedPages = Array.from(new Set(currentOperations.map((operation) => operation.pageIndex)))
+    const editedPages = Array.from(new Set(currentOperations.map((operation) => operation.pageIndex)))
+    setPreviewImages((current) => {
+      let changed = false
+      const next = { ...current }
+      for (const pageIndex of editedPages) {
+        if (next[pageIndex]) {
+          URL.revokeObjectURL(next[pageIndex])
+          delete next[pageIndex]
+          changed = true
+        }
+      }
+      return changed ? next : current
+    })
+
+    if (inlineEditingId || drag) {
+      return
+    }
+
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => {
       void Promise.all(
         editedPages.map(async (pageIndex) => {
-          const response = await fetch(`${apiBase}/documents/${documentInfo.id}/pages/${pageIndex}/preview?scale=2`, {
+          const pageOperations = currentOperations.filter((operation) => operation.pageIndex === pageIndex)
+          const response = await fetch(`${apiBase}/documents/${documentInfo.id}/pages/${pageIndex}/preview?scale=${PREVIEW_SCALE}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ operations: currentOperations }),
+            body: JSON.stringify({ operations: pageOperations }),
+            signal: controller.signal,
           })
           if (!response.ok) {
             throw new Error(`Preview ${pageIndex} failed`)
@@ -464,12 +485,17 @@ function App() {
           })
         })
         .catch(() => {
-          setMessage('Vista previa no disponible; exportacion sigue activa')
+          if (!controller.signal.aborted) {
+            setMessage('Vista previa no disponible; exportacion sigue activa')
+          }
         })
-    }, 350)
+    }, 900)
 
-    return () => window.clearTimeout(timer)
-  }, [apiBase, documentInfo, imageEdits, operations, textEdits])
+    return () => {
+      controller.abort()
+      window.clearTimeout(timer)
+    }
+  }, [apiBase, documentInfo, drag, imageEdits, inlineEditingId, operations, textEdits])
 
   async function uploadPdf(file: File) {
     setBusy(true)
