@@ -179,6 +179,7 @@ type DragState =
 
 const API_PROXY = '/api'
 const API_DIRECT = 'http://127.0.0.1:8000/api'
+const PAGE_IMAGE_SCALE = 1.5
 const PREVIEW_SCALE = 1.35
 const resizeHandles: ResizeHandle[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
 
@@ -444,6 +445,10 @@ function App() {
     }
 
     const editedPages = Array.from(new Set(currentOperations.map((operation) => operation.pageIndex)))
+    if (inlineEditingId || drag) {
+      return
+    }
+
     setPreviewImages((current) => {
       let changed = false
       const next = { ...current }
@@ -456,10 +461,6 @@ function App() {
       }
       return changed ? next : current
     })
-
-    if (inlineEditingId || drag) {
-      return
-    }
 
     const controller = new AbortController()
     const timer = window.setTimeout(() => {
@@ -1145,7 +1146,10 @@ function App() {
         >
           <img
             className="page-bitmap"
-            src={previewImages[page.index] ?? `${apiBase}/documents/${documentInfo?.id}/pages/${page.index}/image?scale=2`}
+            src={
+              previewImages[page.index] ??
+              `${apiBase}/documents/${documentInfo?.id}/pages/${page.index}/image?scale=${PAGE_IMAGE_SCALE}`
+            }
             alt={`Pagina ${page.index + 1}`}
             draggable={false}
           />

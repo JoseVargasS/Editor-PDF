@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import math
 import statistics
 import uuid
 from pathlib import Path
@@ -270,6 +271,46 @@ def span_ink_density(page: fitz.Page, rect: fitz.Rect) -> float:
     return round(max(mean_darkness, dark_ratio * 0.5), 4)
 
 
+def make_ink_density_sampler(page: fitz.Page, scale: float = 2.0):
+    try:
+        pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), colorspace=fitz.csGRAY, alpha=False)
+    except Exception:
+        return lambda rect: span_ink_density(page, rect)
+
+    samples = memoryview(pix.samples)
+    page_rect = page.rect
+    stride = pix.stride
+
+    def sample(rect: fitz.Rect) -> float:
+        clip = normalize_rect(rect + (-0.5, -0.5, 0.5, 0.5), page_rect)
+        if clip.is_empty:
+            return 0.0
+
+        x0 = max(0, min(pix.width, math.floor((clip.x0 - page_rect.x0) * scale)))
+        y0 = max(0, min(pix.height, math.floor((clip.y0 - page_rect.y0) * scale)))
+        x1 = max(x0 + 1, min(pix.width, math.ceil((clip.x1 - page_rect.x0) * scale)))
+        y1 = max(y0 + 1, min(pix.height, math.ceil((clip.y1 - page_rect.y0) * scale)))
+
+        total = 0
+        darkness = 0
+        dark_pixels = 0
+        for y in range(y0, y1):
+            start = y * stride + x0
+            row = samples[start : y * stride + x1]
+            for value in row:
+                darkness += 255 - value
+                if value < 180:
+                    dark_pixels += 1
+                total += 1
+        if not total:
+            return 0.0
+        mean_darkness = darkness / (255 * total)
+        dark_ratio = dark_pixels / total
+        return round(max(mean_darkness, dark_ratio * 0.5), 4)
+
+    return sample
+
+
 def extracted_font_path(doc: fitz.Document, xref: int | None, document_id: str | None = None) -> str | None:
     if not xref or not document_id:
         return None
@@ -320,6 +361,7 @@ def extract_document(document_id: str, path: Path) -> dict[str, Any]:
             "drawings": [],
         }
         fonts_by_name = page_font_lookup(page)
+        ink_density = make_ink_density_sampler(page)
 
         text = page.get_text("dict")
         for block_index, block in enumerate(text.get("blocks", [])):
@@ -347,7 +389,7 @@ def extract_document(document_id: str, path: Path) -> dict[str, Any]:
                             "fontXref": font_info.get("xref") if font_info else None,
                             "fontResource": font_info.get("resource") if font_info else None,
                             "fontType": font_info.get("type") if font_info else None,
-                            "fontInkDensity": span_ink_density(page, bbox),
+                            "fontInkDensity": ink_density(bbox),
                             "color": color_int_to_hex(span.get("color")),
                             "flags": int(span.get("flags", 0)),
                             "ascender": span.get("ascender"),
