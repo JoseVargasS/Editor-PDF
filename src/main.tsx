@@ -449,19 +449,6 @@ function App() {
       return
     }
 
-    setPreviewImages((current) => {
-      let changed = false
-      const next = { ...current }
-      for (const pageIndex of editedPages) {
-        if (next[pageIndex]) {
-          URL.revokeObjectURL(next[pageIndex])
-          delete next[pageIndex]
-          changed = true
-        }
-      }
-      return changed ? next : current
-    })
-
     const controller = new AbortController()
     const timer = window.setTimeout(() => {
       void Promise.all(
@@ -481,8 +468,14 @@ function App() {
       )
         .then((entries) => {
           setPreviewImages((current) => {
-            Object.values(current).forEach(URL.revokeObjectURL)
-            return Object.fromEntries(entries)
+            const next = { ...current }
+            for (const [pageIndex, url] of entries) {
+              if (next[pageIndex]) {
+                URL.revokeObjectURL(next[pageIndex])
+              }
+              next[pageIndex] = url
+            }
+            return next
           })
         })
         .catch(() => {
