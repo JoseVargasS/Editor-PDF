@@ -141,6 +141,8 @@ type Selection =
   | { kind: 'drawing'; id: string }
   | null
 
+type ResizeHandle = 'n' | 'e' | 's' | 'w' | 'nw' | 'ne' | 'se' | 'sw'
+
 type PendingImage = {
   dataUrl: string
   width: number
@@ -170,11 +172,14 @@ type DragState =
       pageIndex: number
       startClient: Point
       startRect: Rect
+      handle: ResizeHandle
+      startOrigin?: Point
     }
   | null
 
 const API_PROXY = '/api'
 const API_DIRECT = 'http://127.0.0.1:8000/api'
+const resizeHandles: ResizeHandle[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
 
 const tools: Array<{ id: Tool; label: string; icon: React.ComponentType<{ size?: number }> }> = [
   { id: 'select', label: 'Seleccionar', icon: MousePointer2 },
@@ -216,6 +221,10 @@ function clampRect(rect: Rect, page: PageInfo): Rect {
   const x0 = Math.max(0, Math.min(page.width - w, rect.x0))
   const y0 = Math.max(0, Math.min(page.height - h, rect.y0))
   return { x0, y0, x1: x0 + w, y1: y0 + h }
+}
+
+function clampValue(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value))
 }
 
 function rectStyle(rect: Rect, zoom: number): React.CSSProperties {
@@ -381,6 +390,39 @@ function App() {
     inlineEditorRef.current.focus()
     inlineEditorRef.current.select()
   }, [inlineEditingId])
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (inlineEditingId || tool !== 'select') {
+        return
+      }
+      const target = event.target as HTMLElement | null
+      if (target?.closest('input, textarea, select, [contenteditable="true"]')) {
+        return
+      }
+      const arrowDelta: Record<string, Point> = {
+        ArrowLeft: { x: -1, y: 0 },
+        ArrowRight: { x: 1, y: 0 },
+        ArrowUp: { x: 0, y: -1 },
+        ArrowDown: { x: 0, y: 1 },
+      }
+      const delta = arrowDelta[event.key]
+      if (!delta) {
+        return
+      }
+      const step = event.shiftKey ? 10 : event.altKey ? 0.25 : 1
+      const handled =
+        event.ctrlKey || event.metaKey
+          ? resizeSelectedBy(delta.x * step, delta.y * step)
+          : moveSelectedBy(delta.x * step, delta.y * step)
+      if (handled) {
+        event.preventDefault()
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [documentInfo, inlineEditingId, selected, selectedImage, selectedOperation, selectedText, tool])
 
   useEffect(() => {
     if (!documentInfo) {
@@ -659,9 +701,11 @@ function App() {
     id: string,
     page: PageInfo,
     startRect: Rect,
+    handle: ResizeHandle,
   ) {
     event.preventDefault()
     event.stopPropagation()
+    const startOrigin = target === 'text' ? textEdits[id]?.origin : undefined
     setDrag({
       kind: 'resize',
       target,
@@ -669,19 +713,29 @@ function App() {
       pageIndex: page.index,
       startClient: { x: event.clientX, y: event.clientY },
       startRect,
+      handle,
+      startOrigin,
     })
     event.currentTarget.setPointerCapture(event.pointerId)
   }
 
-  function resizeRect(startRect: Rect, dx: number, dy: number, page: PageInfo): Rect {
-    const minWidth = 8
-    const minHeight = 8
-    return {
-      x0: startRect.x0,
-      y0: startRect.y0,
-      x1: Math.min(page.width, Math.max(startRect.x0 + minWidth, startRect.x1 + dx)),
-      y1: Math.min(page.height, Math.max(startRect.y0 + minHeight, startRect.y1 + dy)),
+  function resizeRect(startRect: Rect, dx: number, dy: number, page: PageInfo, handle: ResizeHandle): Rect {
+    const minWidth = 4
+    const minHeight = 4
+    const rect = { ...startRect }
+    if (handle.includes('w')) {
+      rect.x0 = clampValue(startRect.x0 + dx, 0, startRect.x1 - minWidth)
     }
+    if (handle.includes('e')) {
+      rect.x1 = clampValue(startRect.x1 + dx, startRect.x0 + minWidth, page.width)
+    }
+    if (handle.includes('n')) {
+      rect.y0 = clampValue(startRect.y0 + dy, 0, startRect.y1 - minHeight)
+    }
+    if (handle.includes('s')) {
+      rect.y1 = clampValue(startRect.y1 + dy, startRect.y0 + minHeight, page.height)
+    }
+    return rect
   }
 
   function updateSelectionText(patch: Partial<TextEdit>) {
@@ -717,6 +771,70 @@ function App() {
     setOperations((current) =>
       current.map((operation) => (operation.id === selectedOperation.id ? { ...operation, ...patch } : operation)),
     )
+  }
+
+  function pageForSelection() {
+    if (!documentInfo || !selected) {
+      return null
+    }
+    if (selected.kind === 'operation' && selectedOperation) {
+      return documentInfo.pages[selectedOperation.pageIndex] ?? null
+    }
+    if (selected.kind === 'text') {
+      return documentInfo.pages.find((page) => page.text.some((span) => span.id === selected.id)) ?? null
+    }
+    if (selected.kind === 'image') {
+      return documentInfo.pages.find((page) => page.images.some((image) => image.id === selected.id)) ?? null
+    }
+    return null
+  }
+
+  function moveSelectedBy(dx: number, dy: number) {
+    const page = pageForSelection()
+    if (!page || !selected) {
+      return false
+    }
+    if (selected.kind === 'text' && selectedText) {
+      const rect = clampRect(moveRect(selectedText.rect, dx, dy), page)
+      const originDx = rect.x0 - selectedText.rect.x0
+      const originDy = rect.y0 - selectedText.rect.y0
+      commitTextEdit({
+        ...selectedText,
+        rect,
+        origin: { x: selectedText.origin.x + originDx, y: selectedText.origin.y + originDy },
+      })
+      return true
+    }
+    if (selected.kind === 'image' && selectedImage) {
+      commitImageEdit({ ...selectedImage, rect: clampRect(moveRect(selectedImage.rect, dx, dy), page) })
+      return true
+    }
+    if (selected.kind === 'operation' && selectedOperation) {
+      const rect = clampRect(moveRect(selectedOperation.rect, dx, dy), page)
+      updateSelectedOperation({ rect })
+      return true
+    }
+    return false
+  }
+
+  function resizeSelectedBy(dx: number, dy: number) {
+    const page = pageForSelection()
+    if (!page || !selected) {
+      return false
+    }
+    if (selected.kind === 'text' && selectedText) {
+      commitTextEdit({ ...selectedText, rect: resizeRect(selectedText.rect, dx, dy, page, 'se') })
+      return true
+    }
+    if (selected.kind === 'image' && selectedImage) {
+      commitImageEdit({ ...selectedImage, rect: resizeRect(selectedImage.rect, dx, dy, page, 'se') })
+      return true
+    }
+    if (selected.kind === 'operation' && selectedOperation) {
+      updateSelectedOperation({ rect: resizeRect(selectedOperation.rect, dx, dy, page, 'se') })
+      return true
+    }
+    return false
   }
 
   function deleteSelected() {
@@ -804,11 +922,19 @@ function App() {
     if (drag.kind === 'resize' && drag.pageIndex === page.index) {
       const dx = (event.clientX - drag.startClient.x) / zoom
       const dy = (event.clientY - drag.startClient.y) / zoom
-      const rect = resizeRect(drag.startRect, dx, dy, page)
+      const rect = resizeRect(drag.startRect, dx, dy, page, drag.handle)
       if (drag.target === 'text') {
         const edit = textEdits[drag.id]
         if (edit) {
-          commitTextEdit({ ...edit, rect })
+          const originDx = rect.x0 - drag.startRect.x0
+          const originDy = rect.y0 - drag.startRect.y0
+          commitTextEdit({
+            ...edit,
+            rect,
+            origin: drag.startOrigin
+              ? { x: drag.startOrigin.x + originDx, y: drag.startOrigin.y + originDy }
+              : edit.origin,
+          })
         }
       } else if (drag.target === 'image') {
         const edit = imageEdits[drag.id]
@@ -952,6 +1078,22 @@ function App() {
     }
   }
 
+  function renderResizeHandles(
+    target: 'text' | 'image' | 'operation',
+    id: string,
+    page: PageInfo,
+    rect: Rect,
+  ) {
+    return resizeHandles.map((handle) => (
+      <span
+        className={`resize-handle resize-${handle}`}
+        key={handle}
+        title="Cambiar tamano"
+        onPointerDown={(event) => startResize(event, target, id, page, rect, handle)}
+      />
+    ))
+  }
+
   function renderPage(page: PageInfo) {
     const pageStyle: React.CSSProperties = {
       width: `${page.width * zoom}px`,
@@ -1029,14 +1171,7 @@ function App() {
                     <RotateCcw size={12} />
                   </button>
                 ) : null}
-                <span
-                  className="resize-handle"
-                  title="Cambiar tamano"
-                  onPointerDown={(event) => {
-                    commitImageEdit(edit)
-                    startResize(event, 'image', image.id, page, edit.rect)
-                  }}
-                />
+                {selectedImageBox ? renderResizeHandles('image', image.id, page, edit.rect) : null}
               </div>
             )
           })}
@@ -1142,74 +1277,62 @@ function App() {
                     <RotateCcw size={12} />
                   </button>
                 ) : null}
-                {!inlineEditing ? (
-                  <span
-                    className="resize-handle"
-                    title="Cambiar tamano"
-                    onPointerDown={(event) => {
-                      commitTextEdit(edit)
-                      startResize(event, 'text', span.id, page, edit.rect)
-                    }}
-                  />
-                ) : null}
+                {!inlineEditing && selectedSpan ? renderResizeHandles('text', span.id, page, edit.rect) : null}
               </div>
             )
           })}
           {operations
             .filter((operation) => operation.pageIndex === page.index)
-            .map((operation) => (
-              <div
-                role="button"
-                tabIndex={0}
-                className={`operation-box op-${operation.type} ${
-                  selected?.kind === 'operation' && selected.id === operation.id ? 'is-selected' : ''
-                }`}
-                key={operation.id}
-                style={rectStyle(operation.rect, zoom)}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  setSelected({ kind: 'operation', id: operation.id })
-                }}
-                onPointerDown={(event) => startMove(event, 'operation', operation.id, page)}
-                title={operation.type}
-              >
-                {operation.type === 'add_text' && !previewImages[page.index] ? (
-                  <span
-                    className="text-preview"
-                    style={{
-                      ...textRenderStyle(
-                        operation.fontFamily,
-                        operation.fontSize,
-                        operation.fontFlags,
-                        operation.color,
-                        zoom,
-                        operation.fontInkDensity,
-                      ),
+            .map((operation) => {
+              const selectedOperationBox = selected?.kind === 'operation' && selected.id === operation.id
+              return (
+                <div
+                  role="button"
+                  tabIndex={0}
+                  className={`operation-box op-${operation.type} ${selectedOperationBox ? 'is-selected' : ''}`}
+                  key={operation.id}
+                  style={rectStyle(operation.rect, zoom)}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    setSelected({ kind: 'operation', id: operation.id })
+                  }}
+                  onPointerDown={(event) => startMove(event, 'operation', operation.id, page)}
+                  title={operation.type}
+                >
+                  {operation.type === 'add_text' && !previewImages[page.index] ? (
+                    <span
+                      className="text-preview"
+                      style={{
+                        ...textRenderStyle(
+                          operation.fontFamily,
+                          operation.fontSize,
+                          operation.fontFlags,
+                          operation.color,
+                          zoom,
+                          operation.fontInkDensity,
+                        ),
+                      }}
+                    >
+                      {operation.text}
+                    </span>
+                  ) : operation.type === 'add_image' && operation.imageData && !previewImages[page.index] ? (
+                    <img src={operation.imageData} alt="" />
+                  ) : null}
+                  <button
+                    className="revert-edit-button"
+                    title="Revertir cambio"
+                    onPointerDown={stopOverlayAction}
+                    onClick={(event) => {
+                      stopOverlayAction(event)
+                      revertOperation(operation.id)
                     }}
                   >
-                    {operation.text}
-                  </span>
-                ) : operation.type === 'add_image' && operation.imageData && !previewImages[page.index] ? (
-                  <img src={operation.imageData} alt="" />
-                ) : null}
-                <button
-                  className="revert-edit-button"
-                  title="Revertir cambio"
-                  onPointerDown={stopOverlayAction}
-                  onClick={(event) => {
-                    stopOverlayAction(event)
-                    revertOperation(operation.id)
-                  }}
-                >
-                  <RotateCcw size={12} />
-                </button>
-                <span
-                  className="resize-handle"
-                  title="Cambiar tamano"
-                  onPointerDown={(event) => startResize(event, 'operation', operation.id, page, operation.rect)}
-                />
-              </div>
-            ))}
+                    <RotateCcw size={12} />
+                  </button>
+                  {selectedOperationBox ? renderResizeHandles('operation', operation.id, page, operation.rect) : null}
+                </div>
+              )
+            })}
           {draft ? (
             <div
               className={`draft-box draft-${drag?.kind === 'draw' ? drag.tool : 'rectangle'}`}
