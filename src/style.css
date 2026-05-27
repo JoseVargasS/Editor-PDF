@@ -159,6 +159,12 @@ button:disabled {
   color: white;
 }
 
+.tool-button.preview-action {
+  background: var(--green);
+  border-color: var(--green);
+  color: white;
+}
+
 .tool-button.command {
   font-weight: 650;
 }
@@ -187,9 +193,12 @@ button:disabled {
 
 .sidebar,
 .inspector {
+  align-self: start;
   background: var(--surface);
   border-right: 1px solid var(--line);
-  min-height: calc(100vh - 64px);
+  height: calc(100vh - 64px);
+  min-height: 0;
+  overflow-y: auto;
   padding: 14px;
   position: sticky;
   top: 64px;
@@ -215,20 +224,39 @@ button:disabled {
   gap: 8px;
 }
 
+.page-selection-summary {
+  color: var(--muted);
+  font-size: 12px;
+  margin: -4px 0 10px;
+}
+
 .page-link {
   align-items: center;
   background: var(--surface-2);
   border: 1px solid transparent;
   border-radius: 6px;
   color: var(--ink);
-  display: flex;
-  gap: 10px;
-  padding: 10px;
+  display: grid;
+  gap: 6px 8px;
+  grid-template-columns: 16px 34px 28px 1fr;
+  padding: 8px;
   text-decoration: none;
 }
 
 .page-link:hover {
   border-color: #b9c3d3;
+}
+
+.page-link.is-checked {
+  border-color: rgba(5, 150, 105, 0.45);
+  box-shadow: inset 3px 0 0 var(--green);
+}
+
+.page-link input {
+  flex: 0 0 auto;
+  height: 16px;
+  margin: 0;
+  width: 16px;
 }
 
 .page-link span {
@@ -238,13 +266,24 @@ button:disabled {
   border-radius: 5px;
   display: inline-flex;
   font-weight: 750;
-  height: 28px;
+  height: 26px;
   justify-content: center;
-  min-width: 28px;
+  min-width: 26px;
 }
 
 .page-link small {
   color: var(--muted);
+  font-size: 12px;
+}
+
+.page-thumb {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  display: block;
+  height: 44px;
+  object-fit: contain;
+  width: 34px;
 }
 
 .canvas-area {

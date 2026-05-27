@@ -135,6 +135,11 @@ type EditorOperation = {
   origin?: Point
 }
 
+type ExportPayload = {
+  operations: EditorOperation[]
+  pageIndexes?: number[]
+}
+
 type Selection =
   | { kind: 'text'; id: string }
   | { kind: 'image'; id: string }
@@ -191,7 +196,6 @@ const tools: Array<{ id: Tool; label: string; icon: React.ComponentType<{ size?:
   { id: 'rectangle', label: 'Cuadro', icon: Square },
   { id: 'highlight', label: 'Resaltar', icon: Highlighter },
   { id: 'redact', label: 'Redactar', icon: Eraser },
-  { id: 'image', label: 'Imagen', icon: ImagePlus },
 ]
 
 function uid(prefix: string) {
@@ -279,6 +283,19 @@ function measureInlineTextWidth(edit: TextEdit, value: string, zoom: number) {
   return context.measureText(value || ' ').width / zoom + 12
 }
 
+function measureOperationTextWidth(operation: EditorOperation, value: string, zoom: number) {
+  const canvas = document.createElement('canvas')
+  const context = canvas.getContext('2d')
+  const fontSize = operation.fontSize ?? 14
+  if (!context) {
+    return Math.max(width(operation.rect), value.length * fontSize * 0.62)
+  }
+  const fontStyle = previewFontStyle(operation.fontFamily, operation.fontFlags)
+  const fontWeight = previewFontWeight(operation.fontFamily, operation.fontFlags, operation.fontInkDensity)
+  context.font = `${fontStyle} ${fontWeight} ${fontSize * zoom}px ${previewFontFamily(operation.fontFamily)}`
+  return context.measureText(value || ' ').width / zoom + 12
+}
+
 function isPdfFile(file: File) {
   return file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
 }
@@ -353,6 +370,10 @@ function makeFormData(file: File) {
   return body
 }
 
+function makeExportPayload(operations: EditorOperation[], pageIndexes?: number[]): ExportPayload {
+  return pageIndexes?.length ? { operations, pageIndexes } : { operations }
+}
+
 function App() {
   const [documentInfo, setDocumentInfo] = useState<PdfDocument | null>(null)
   const [tool, setTool] = useState<Tool>('select')
@@ -361,18 +382,21 @@ function App() {
   const [textEdits, setTextEdits] = useState<Record<string, TextEdit>>({})
   const [imageEdits, setImageEdits] = useState<Record<string, ImageEdit>>({})
   const [operations, setOperations] = useState<EditorOperation[]>([])
+  const [selectedPageIndexes, setSelectedPageIndexes] = useState<number[]>([])
   const [pendingImage, setPendingImage] = useState<PendingImage | null>(null)
   const [apiBase, setApiBase] = useState(API_PROXY)
   const [previewImages, setPreviewImages] = useState<Record<number, string>>({})
   const [previewMode, setPreviewMode] = useState(false)
   const [drag, setDrag] = useState<DragState>(null)
   const [inlineEditingId, setInlineEditingId] = useState<string | null>(null)
+  const [inlineEditingOperationId, setInlineEditingOperationId] = useState<string | null>(null)
   const [isDraggingPdf, setIsDraggingPdf] = useState(false)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('Listo')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
   const inlineEditorRef = useRef<HTMLInputElement>(null)
+  const canvasAreaRef = useRef<HTMLElement>(null)
   const fileDragDepthRef = useRef(0)
 
   const selectedText = selected?.kind === 'text' ? textEdits[selected.id] : null
@@ -387,18 +411,19 @@ function App() {
       operations.length,
     [imageEdits, operations.length, textEdits],
   )
+  const exportPageIndexes = selectedPageIndexes.length ? selectedPageIndexes : undefined
 
   useEffect(() => {
-    if (!inlineEditingId || !inlineEditorRef.current) {
+    if ((!inlineEditingId && !inlineEditingOperationId) || !inlineEditorRef.current) {
       return
     }
     inlineEditorRef.current.focus()
     inlineEditorRef.current.select()
-  }, [inlineEditingId])
+  }, [inlineEditingId, inlineEditingOperationId])
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
-      if (previewMode || inlineEditingId || tool !== 'select') {
+      if (previewMode || inlineEditingId || inlineEditingOperationId || tool !== 'select') {
         return
       }
       const target = event.target as HTMLElement | null
@@ -427,7 +452,7 @@ function App() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [documentInfo, inlineEditingId, previewMode, selected, selectedImage, selectedOperation, selectedText, tool])
+  }, [documentInfo, inlineEditingId, inlineEditingOperationId, previewMode, selected, selectedImage, selectedOperation, selectedText, tool])
 
   useEffect(() => {
     if (!documentInfo) {
@@ -436,6 +461,7 @@ function App() {
         return {}
       })
       setPreviewMode(false)
+      setSelectedPageIndexes([])
       return
     }
 
@@ -463,7 +489,7 @@ function App() {
           const response = await fetch(`${apiBase}/documents/${documentInfo.id}/pages/${pageIndex}/preview?scale=${PREVIEW_SCALE}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ operations: pageOperations }),
+            body: JSON.stringify(makeExportPayload(pageOperations)),
             signal: controller.signal,
           })
           if (!response.ok) {
@@ -520,6 +546,7 @@ function App() {
       setApiBase(usedApiBase)
       setDocumentInfo(payload)
       setSelected(null)
+      setSelectedPageIndexes([])
       setTextEdits({})
       setImageEdits({})
       setOperations([])
@@ -538,6 +565,7 @@ function App() {
               setApiBase(API_DIRECT)
               setDocumentInfo(payload)
               setSelected(null)
+              setSelectedPageIndexes([])
               setTextEdits({})
               setImageEdits({})
               setOperations([])
@@ -652,6 +680,7 @@ function App() {
     const edit = getTextEdit(span)
     commitTextEdit(edit)
     setSelected({ kind: 'text', id: span.id })
+    setInlineEditingOperationId(null)
     setInlineEditingId(span.id)
     setTool('select')
   }
@@ -696,6 +725,7 @@ function App() {
     setBusy(true)
     setMessage('Generando preview final')
     setInlineEditingId(null)
+    setInlineEditingOperationId(null)
     setSelected(null)
     try {
       const editedPages = Array.from(new Set(currentOperations.map((operation) => operation.pageIndex)))
@@ -705,7 +735,7 @@ function App() {
           const response = await fetch(`${apiBase}/documents/${documentInfo.id}/pages/${pageIndex}/preview?scale=${PREVIEW_SCALE}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ operations: pageOperations }),
+            body: JSON.stringify(makeExportPayload(pageOperations)),
           })
           if (!response.ok) {
             throw new Error(`No se pudo previsualizar la pagina ${pageIndex + 1}`)
@@ -724,6 +754,40 @@ function App() {
     } finally {
       setBusy(false)
     }
+  }
+
+  function togglePageSelection(pageIndex: number) {
+    setPreviewMode(false)
+    clearPreviewImages()
+    setSelectedPageIndexes((current) =>
+      current.includes(pageIndex)
+        ? current.filter((index) => index !== pageIndex)
+        : [...current, pageIndex].sort((a, b) => a - b),
+    )
+  }
+
+  function handleCanvasWheel(event: React.WheelEvent<HTMLElement>) {
+    if (!event.ctrlKey) {
+      return
+    }
+    event.preventDefault()
+    const area = canvasAreaRef.current
+    if (!area) {
+      return
+    }
+    const bounds = area.getBoundingClientRect()
+    const pointerX = event.clientX - bounds.left + area.scrollLeft
+    const pointerY = event.clientY - bounds.top + area.scrollTop
+    setZoom((current) => {
+      const factor = event.deltaY < 0 ? 1.08 : 0.925
+      const next = Math.max(0.45, Math.min(2.2, current * factor))
+      window.requestAnimationFrame(() => {
+        const ratio = next / current
+        area.scrollLeft = pointerX * ratio - (event.clientX - bounds.left)
+        area.scrollTop = pointerY * ratio - (event.clientY - bounds.top)
+      })
+      return next
+    })
   }
 
   function revertTextEdit(id: string) {
@@ -757,6 +821,9 @@ function App() {
     clearPreviewImages()
     setPreviewMode(false)
     setOperations((current) => current.filter((operation) => operation.id !== id))
+    if (inlineEditingOperationId === id) {
+      setInlineEditingOperationId(null)
+    }
     if (selected?.kind === 'operation' && selected.id === id) {
       setSelected(null)
     }
@@ -873,6 +940,35 @@ function App() {
     )
   }
 
+  function beginOperationTextEdit(operation: EditorOperation) {
+    if (previewMode || operation.type !== 'add_text') {
+      return
+    }
+    setSelected({ kind: 'operation', id: operation.id })
+    setInlineEditingId(null)
+    setInlineEditingOperationId(operation.id)
+    setTool('select')
+  }
+
+  function updateInlineOperationText(operation: EditorOperation, value: string, page: PageInfo) {
+    const singleLineValue = value.replace(/[\r\n]+/g, ' ')
+    const measuredWidth = measureOperationTextWidth(operation, singleLineValue, zoom)
+    const nextWidth = Math.max(width(operation.rect), measuredWidth)
+    updateOperationById(operation.id, {
+      text: singleLineValue,
+      rect: {
+        ...operation.rect,
+        x1: Math.min(page.width, operation.rect.x0 + nextWidth),
+      },
+    })
+  }
+
+  function updateOperationById(id: string, patch: Partial<EditorOperation>) {
+    setOperations((current) =>
+      current.map((operation) => (operation.id === id ? { ...operation, ...patch } : operation)),
+    )
+  }
+
   function pageForSelection() {
     if (!documentInfo || !selected) {
       return null
@@ -957,6 +1053,7 @@ function App() {
     setTextEdits({})
     setImageEdits({})
     setOperations([])
+    setSelectedPageIndexes([])
     setPreviewImages((current) => {
       Object.values(current).forEach(URL.revokeObjectURL)
       return {}
@@ -969,6 +1066,7 @@ function App() {
     if (previewMode) {
       return
     }
+    setInlineEditingOperationId(null)
     if (!documentInfo || event.target !== event.currentTarget) {
       return
     }
@@ -1048,9 +1146,7 @@ function App() {
           commitImageEdit({ ...edit, rect })
         }
       } else {
-        setOperations((current) =>
-          current.map((operation) => (operation.id === drag.id ? { ...operation, rect } : operation)),
-        )
+        updateOperationById(drag.id, { rect })
       }
       return
     }
@@ -1073,9 +1169,7 @@ function App() {
           commitImageEdit({ ...edit, rect })
         }
       } else {
-        setOperations((current) =>
-          current.map((operation) => (operation.id === drag.id ? { ...operation, rect } : operation)),
-        )
+        updateOperationById(drag.id, { rect })
       }
     }
   }
@@ -1167,7 +1261,7 @@ function App() {
       const response = await fetch(`${apiBase}/documents/${documentInfo.id}/export`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ operations: buildOperations() }),
+        body: JSON.stringify(makeExportPayload(buildOperations(), exportPageIndexes)),
       })
       if (!response.ok) {
         throw new Error('No se pudo exportar')
@@ -1413,10 +1507,56 @@ function App() {
                     event.stopPropagation()
                     setSelected({ kind: 'operation', id: operation.id })
                   }}
-                  onPointerDown={(event) => startMove(event, 'operation', operation.id, page)}
+                  onDoubleClick={(event) => {
+                    if (operation.type !== 'add_text') {
+                      return
+                    }
+                    event.preventDefault()
+                    event.stopPropagation()
+                    beginOperationTextEdit(operation)
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && operation.type === 'add_text') {
+                      beginOperationTextEdit(operation)
+                    }
+                  }}
+                  onPointerDown={(event) => {
+                    if (inlineEditingOperationId === operation.id) {
+                      return
+                    }
+                    startMove(event, 'operation', operation.id, page)
+                  }}
                   title={operation.type}
                 >
-                  {operation.type === 'add_text' && !previewImages[page.index] ? (
+                  {operation.type === 'add_text' && inlineEditingOperationId === operation.id ? (
+                    <input
+                      ref={inlineEditorRef}
+                      type="text"
+                      spellCheck={false}
+                      className="inline-text-editor"
+                      value={operation.text ?? ''}
+                      style={{
+                        ...textRenderStyle(
+                          operation.fontFamily,
+                          operation.fontSize,
+                          operation.fontFlags,
+                          operation.color,
+                          zoom,
+                          operation.fontInkDensity,
+                        ),
+                      }}
+                      onBlur={() => setInlineEditingOperationId(null)}
+                      onChange={(event) => updateInlineOperationText(operation, event.target.value, page)}
+                      onClick={(event) => event.stopPropagation()}
+                      onDoubleClick={(event) => event.stopPropagation()}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Escape' || (event.key === 'Enter' && (event.ctrlKey || event.metaKey))) {
+                          setInlineEditingOperationId(null)
+                        }
+                      }}
+                    />
+                  ) : operation.type === 'add_text' && !previewImages[page.index] ? (
                     <span
                       className="text-preview"
                       style={{
@@ -1537,9 +1677,10 @@ function App() {
               }
             }}
           />
-          <button className="tool-button" onClick={() => imageInputRef.current?.click()} title="Cargar imagen">
-            <ImagePlus size={18} />
-          </button>
+                  <button className="tool-button command" onClick={() => imageInputRef.current?.click()} title="Cargar imagen">
+                    <ImagePlus size={18} />
+                    <span>Imagen</span>
+                  </button>
           <button className="tool-button" onClick={() => setZoom((value) => Math.max(0.45, value - 0.1))} title="Alejar">
             <Minus size={18} />
           </button>
@@ -1547,7 +1688,12 @@ function App() {
           <button className="tool-button" onClick={() => setZoom((value) => Math.min(2.2, value + 0.1))} title="Acercar">
             <Plus size={18} />
           </button>
-          <button className="tool-button" onClick={resetAll} disabled={!totalEdits} title="Reiniciar cambios">
+          <button
+            className="tool-button"
+            onClick={resetAll}
+            disabled={!totalEdits && !selectedPageIndexes.length}
+            title="Reiniciar cambios"
+          >
             <RotateCcw size={18} />
           </button>
           {previewMode ? (
@@ -1557,7 +1703,7 @@ function App() {
             </button>
           ) : (
             <button
-              className="tool-button command"
+              className="tool-button command preview-action"
               onClick={renderFinalPreview}
               disabled={!documentInfo || !totalEdits || busy}
               title="Ver resultado final"
@@ -1577,17 +1723,41 @@ function App() {
       <main className="workspace">
         <aside className="sidebar">
           <div className="panel-title">Paginas</div>
+          {documentInfo ? (
+            <div className="page-selection-summary">
+              {selectedPageIndexes.length
+                ? `${selectedPageIndexes.length} de ${documentInfo.pageCount} para exportar`
+                : 'Sin seleccion: exporta todo'}
+            </div>
+          ) : null}
           <div className="page-list">
-            {documentInfo?.pages.map((page) => (
-              <a className="page-link" href={`#page-${page.index}`} key={page.index}>
-                <span>{page.index + 1}</span>
-                <small>{Math.round(page.width)} x {Math.round(page.height)}</small>
-              </a>
-            )) ?? <div className="empty-state">Abre un PDF</div>}
+            {documentInfo?.pages.map((page) => {
+              const checked = selectedPageIndexes.includes(page.index)
+              return (
+                <a className={`page-link ${checked ? 'is-checked' : ''}`} href={`#page-${page.index}`} key={page.index}>
+                  <input
+                    aria-label={`Exportar pagina ${page.index + 1}`}
+                    checked={checked}
+                    onChange={() => togglePageSelection(page.index)}
+                    onClick={(event) => event.stopPropagation()}
+                    type="checkbox"
+                  />
+                  <img
+                    alt=""
+                    className="page-thumb"
+                    decoding="async"
+                    loading="lazy"
+                    src={`${apiBase}/documents/${documentInfo.id}/pages/${page.index}/image?scale=0.18`}
+                  />
+                  <span>{page.index + 1}</span>
+                  <small>{Math.round(page.width)} x {Math.round(page.height)}</small>
+                </a>
+              )
+            }) ?? <div className="empty-state">Abre un PDF</div>}
           </div>
         </aside>
 
-        <section className="canvas-area">
+        <section className="canvas-area" onWheel={handleCanvasWheel} ref={canvasAreaRef}>
           {documentInfo ? (
             documentInfo.pages.map((page) => (
               <div id={`page-${page.index}`} key={page.index}>

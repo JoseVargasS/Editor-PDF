@@ -80,6 +80,7 @@ class EditOperation(BaseModel):
 
 class ExportRequest(BaseModel):
     operations: list[EditOperation] = Field(default_factory=list)
+    pageIndexes: list[int] | None = None
 
 
 def document_dir(document_id: str) -> Path:
@@ -793,6 +794,11 @@ def export_document(document_id: str, request: ExportRequest) -> FileResponse:
     doc = fitz.open(path)
     try:
         apply_operations_to_document(doc, request.operations, document_id)
+        if request.pageIndexes:
+            valid_pages = sorted({index for index in request.pageIndexes if 0 <= index < doc.page_count})
+            if not valid_pages:
+                raise HTTPException(status_code=400, detail="Selecciona al menos una pagina valida")
+            doc.select(valid_pages)
         out = output_path(document_id)
         doc.save(out, garbage=4, deflate=True, clean=True)
     finally:
