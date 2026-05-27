@@ -455,6 +455,24 @@ function App() {
   }, [documentInfo, inlineEditingId, inlineEditingOperationId, previewMode, selected, selectedImage, selectedOperation, selectedText, tool])
 
   useEffect(() => {
+    const area = canvasAreaRef.current
+    if (!area) {
+      return
+    }
+
+    function handleNativeWheel(event: WheelEvent) {
+      if (!event.ctrlKey) {
+        return
+      }
+      event.preventDefault()
+      zoomCanvasAt(event.clientX, event.clientY, event.deltaY)
+    }
+
+    area.addEventListener('wheel', handleNativeWheel, { passive: false })
+    return () => area.removeEventListener('wheel', handleNativeWheel)
+  }, [])
+
+  useEffect(() => {
     if (!documentInfo) {
       setPreviewImages((current) => {
         Object.values(current).forEach(URL.revokeObjectURL)
@@ -766,25 +784,21 @@ function App() {
     )
   }
 
-  function handleCanvasWheel(event: React.WheelEvent<HTMLElement>) {
-    if (!event.ctrlKey) {
-      return
-    }
-    event.preventDefault()
+  function zoomCanvasAt(clientX: number, clientY: number, deltaY: number) {
     const area = canvasAreaRef.current
     if (!area) {
       return
     }
     const bounds = area.getBoundingClientRect()
-    const pointerX = event.clientX - bounds.left + area.scrollLeft
-    const pointerY = event.clientY - bounds.top + area.scrollTop
+    const pointerX = clientX - bounds.left + area.scrollLeft
+    const pointerY = clientY - bounds.top + area.scrollTop
     setZoom((current) => {
-      const factor = event.deltaY < 0 ? 1.08 : 0.925
+      const factor = deltaY < 0 ? 1.08 : 0.925
       const next = Math.max(0.45, Math.min(2.2, current * factor))
       window.requestAnimationFrame(() => {
         const ratio = next / current
-        area.scrollLeft = pointerX * ratio - (event.clientX - bounds.left)
-        area.scrollTop = pointerY * ratio - (event.clientY - bounds.top)
+        area.scrollLeft = pointerX * ratio - (clientX - bounds.left)
+        area.scrollTop = pointerY * ratio - (clientY - bounds.top)
       })
       return next
     })
@@ -1757,7 +1771,7 @@ function App() {
           </div>
         </aside>
 
-        <section className="canvas-area" onWheel={handleCanvasWheel} ref={canvasAreaRef}>
+        <section className="canvas-area" ref={canvasAreaRef}>
           {documentInfo ? (
             documentInfo.pages.map((page) => (
               <div id={`page-${page.index}`} key={page.index}>
