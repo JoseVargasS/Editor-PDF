@@ -374,8 +374,13 @@ def embedded_text_commands(
     rect: fitz.Rect,
     encoded_lines: list[str],
     char_spacing: float = 0.0,
+    horizontal_scale: float = 100.0,
 ) -> list[str]:
     font_size = float(op.fontSize or max(8, rect.height * 0.72))
+    if is_compact_numeric_code(op.text or "", font_size):
+        font_size *= 1.083
+        horizontal_scale = 85.27
+        char_spacing = 0.0
     color = hex_to_rgb(op.color, (0, 0, 0))
     origin = op.origin or PointModel(x=rect.x0, y=rect.y0 + font_size)
     pdf_origin = fitz.Point(float(origin.x), float(origin.y)) * ~page.transformation_matrix
@@ -386,6 +391,8 @@ def embedded_text_commands(
         "BT",
         f"/{op.fontResource} {font_size:.6f} Tf",
     ]
+    if abs(horizontal_scale - 100.0) > 0.05:
+        commands.append(f"{horizontal_scale:.6f} Tz")
     if abs(char_spacing) > 0.0005:
         commands.append(f"{char_spacing:.6f} Tc")
     commands.extend(
@@ -399,6 +406,14 @@ def embedded_text_commands(
         commands.append(f"<{encoded}> Tj")
     commands.extend(["ET", "Q", ""])
     return commands
+
+
+def is_compact_numeric_code(text: str, font_size: float) -> bool:
+    compact = "".join(ch for ch in text if not ch.isspace())
+    if font_size > 8 or len(compact) < 12:
+        return False
+    digit_count = sum(1 for ch in compact if ch.isdigit())
+    return digit_count / max(1, len(compact)) >= 0.85
 
 
 def measure_embedded_text_width(
@@ -435,14 +450,14 @@ def embedded_char_spacing(
     encoded_lines: list[str],
 ) -> float:
     text = op.text or ""
-    if "\n" in text or len(text) < 2:
+    font_size = float(op.fontSize or max(8, rect.height * 0.72))
+    if "\n" in text or len(text) < 2 or is_compact_numeric_code(text, font_size):
         return 0.0
     measured_width = measure_embedded_text_width(doc, op, rect, encoded_lines)
     target_width = max(0.5, rect.width)
     if not measured_width or measured_width <= 0.5:
         return 0.0
     gap_count = max(1, len(text) - 1)
-    font_size = float(op.fontSize or max(8, rect.height * 0.72))
     spacing = (target_width - measured_width) / (gap_count * font_size)
     return max(-0.08, min(0.08, spacing))
 
