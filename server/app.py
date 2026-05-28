@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import math
+import re
 import statistics
 import uuid
 from pathlib import Path
@@ -162,7 +163,15 @@ def windows_font_candidates(family: str, bold: bool, italic: bool) -> list[Path]
     fonts_dir = Path("C:/Windows/Fonts")
     key = norm_font_key(family)
     stems: list[str] = []
-    if "calibri" in key:
+    if "omnes" in key:
+        stems = ["segoeuiz" if bold and italic else "segoeuib" if bold else "segoeuii" if italic else "segoeui"]
+    elif "neueplak" in key and "cond" in key:
+        stems = ["arialnbi" if bold and italic else "arialnb" if bold else "arialni" if italic else "arialn"]
+    elif "arialnarrow" in key or ("arial" in key and "narrow" in key):
+        stems = ["arialnbi" if bold and italic else "arialnb" if bold else "arialni" if italic else "arialn"]
+    elif "neueplak" in key:
+        stems = ["arialbi" if bold and italic else "arialbd" if bold else "ariali" if italic else "arial"]
+    elif "calibri" in key:
         stems = ["calibriz" if bold and italic else "calibrib" if bold else "calibrii" if italic else "calibri"]
     elif "arial" in key or "helvetica" in key:
         stems = ["arialbi" if bold and italic else "arialbd" if bold else "ariali" if italic else "arial"]
@@ -254,6 +263,212 @@ def match_font_info(span_font: str | None, lookup: dict[str, dict[str, Any]]) ->
         if key and (key in candidate_key or candidate_key in key):
             return info
     return None
+
+
+def operation_font_info(page: fitz.Page, op: EditOperation) -> dict[str, Any] | None:
+    resource = (op.fontResource or "").strip()
+    xref = int(op.fontXref or 0)
+    doc = page.parent
+    for font in page.get_fonts(full=True):
+        font_xref, ext, font_type, basefont, resource_name, encoding = font[:6]
+        if (resource and resource_name == resource) or (xref and int(font_xref) == xref):
+            font_object = doc.xref_object(int(font_xref), compressed=False) if doc else ""
+            to_unicode_match = re.search(r"/ToUnicode\s+(\d+)\s+0\s+R", font_object)
+            return {
+                "xref": int(font_xref),
+                "ext": ext,
+                "type": font_type,
+                "basefont": clean_font_name(basefont),
+                "resource": resource_name,
+                "encoding": encoding,
+                "to_unicode_xref": int(to_unicode_match.group(1)) if to_unicode_match else None,
+            }
+    return None
+
+
+def can_reuse_embedded_font_for_text(font_info: dict[str, Any] | None) -> bool:
+    if not font_info:
+        return True
+    font_type = str(font_info.get("type") or "").lower()
+    encoding = str(font_info.get("encoding") or "").lower()
+    return not (font_type == "type0" or "identity" in encoding)
+
+
+def decode_utf16_hex(value: str) -> str:
+    try:
+        return bytes.fromhex(value).decode("utf-16-be")
+    except Exception:
+        return ""
+
+
+def embedded_font_code_map(doc: fitz.Document, font_info: dict[str, Any] | None) -> dict[str, str]:
+    if not font_info:
+        return {}
+    to_unicode_xref = font_info.get("to_unicode_xref")
+    if not to_unicode_xref:
+        return {}
+    try:
+        cmap = doc.xref_stream(int(to_unicode_xref)).decode("latin1", errors="ignore")
+    except Exception:
+        return {}
+
+    result: dict[str, str] = {}
+    for char_section in re.findall(r"beginbfchar\s*(.*?)\s*endbfchar", cmap, flags=re.S):
+        for code_hex, unicode_hex in re.findall(r"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>", char_section):
+            text = decode_utf16_hex(unicode_hex)
+            if len(text) == 1:
+                result.setdefault(text, code_hex.upper())
+
+    range_pattern = re.compile(
+        r"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*(?:<([0-9A-Fa-f]+)>|\[([^\]]+)\])"
+    )
+    for range_section in re.findall(r"beginbfrange\s*(.*?)\s*endbfrange", cmap, flags=re.S):
+        for start_hex, end_hex, first_unicode_hex, unicode_list in range_pattern.findall(range_section):
+            start = int(start_hex, 16)
+            end = int(end_hex, 16)
+            if first_unicode_hex:
+                first = int(first_unicode_hex, 16)
+                code_width = len(start_hex)
+                for cid in range(start, end + 1):
+                    text = chr(first + cid - start)
+                    result.setdefault(text, f"{cid:0{code_width}X}")
+                continue
+            values = re.findall(r"<([0-9A-Fa-f]+)>", unicode_list)
+            for offset, unicode_hex in enumerate(values[: end - start + 1]):
+                text = decode_utf16_hex(unicode_hex)
+                if len(text) == 1:
+                    result.setdefault(text, f"{start + offset:0{len(start_hex)}X}")
+    return result
+
+
+def encode_embedded_text(text: str, code_map: dict[str, str]) -> str | None:
+    encoded: list[str] = []
+    for char in text:
+        code = code_map.get(char)
+        if code is None:
+            return None
+        encoded.append(code)
+    return "".join(encoded)
+
+
+def append_page_content_stream(doc: fitz.Document, page: fitz.Page, content: bytes) -> None:
+    xref = doc.get_new_xref()
+    doc.update_object(xref, "<<>>")
+    doc.update_stream(xref, content, compress=True)
+
+    contents_type, contents_value = doc.xref_get_key(page.xref, "Contents")
+    if contents_type == "xref":
+        doc.xref_set_key(page.xref, "Contents", f"[{contents_value} {xref} 0 R]")
+        return
+    if contents_type == "array":
+        value = contents_value.strip()
+        if value.endswith("]"):
+            doc.xref_set_key(page.xref, "Contents", f"{value[:-1]} {xref} 0 R]")
+            return
+    doc.xref_set_key(page.xref, "Contents", f"{xref} 0 R")
+
+
+def embedded_text_commands(
+    op: EditOperation,
+    page: fitz.Page,
+    rect: fitz.Rect,
+    encoded_lines: list[str],
+    char_spacing: float = 0.0,
+) -> list[str]:
+    font_size = float(op.fontSize or max(8, rect.height * 0.72))
+    color = hex_to_rgb(op.color, (0, 0, 0))
+    origin = op.origin or PointModel(x=rect.x0, y=rect.y0 + font_size)
+    pdf_origin = fitz.Point(float(origin.x), float(origin.y)) * ~page.transformation_matrix
+    leading = font_size * 1.18
+    commands = [
+        "q",
+        f"{color[0]:.6f} {color[1]:.6f} {color[2]:.6f} rg",
+        "BT",
+        f"/{op.fontResource} {font_size:.6f} Tf",
+    ]
+    if abs(char_spacing) > 0.0005:
+        commands.append(f"{char_spacing:.6f} Tc")
+    commands.extend(
+        [
+            f"{pdf_origin.x:.6f} {pdf_origin.y:.6f} Td",
+        ]
+    )
+    for index, encoded in enumerate(encoded_lines):
+        if index:
+            commands.append(f"0 -{leading:.6f} Td")
+        commands.append(f"<{encoded}> Tj")
+    commands.extend(["ET", "Q", ""])
+    return commands
+
+
+def measure_embedded_text_width(
+    doc: fitz.Document,
+    op: EditOperation,
+    rect: fitz.Rect,
+    encoded_lines: list[str],
+) -> float | None:
+    clone = clone_document(doc)
+    if clone is None:
+        return None
+    try:
+        clone_page = clone[int(op.pageIndex)]
+        commands = embedded_text_commands(op, clone_page, rect, encoded_lines)
+        append_page_content_stream(clone, clone_page, "\n".join(commands).encode("ascii"))
+        spans: list[dict[str, Any]] = []
+        for block in clone_page.get_text("dict").get("blocks", []):
+            for line in block.get("lines", []):
+                spans.extend(line.get("spans", []))
+        matches = [span for span in spans if span.get("text") == (op.text or "")]
+        if not matches:
+            return None
+        return float(fitz.Rect(matches[-1].get("bbox")).width)
+    except Exception:
+        return None
+    finally:
+        clone.close()
+
+
+def embedded_char_spacing(
+    doc: fitz.Document,
+    op: EditOperation,
+    rect: fitz.Rect,
+    encoded_lines: list[str],
+) -> float:
+    text = op.text or ""
+    if "\n" in text or len(text) < 2:
+        return 0.0
+    measured_width = measure_embedded_text_width(doc, op, rect, encoded_lines)
+    target_width = max(0.5, rect.width)
+    if not measured_width or measured_width <= 0.5:
+        return 0.0
+    gap_count = max(1, len(text) - 1)
+    font_size = float(op.fontSize or max(8, rect.height * 0.72))
+    spacing = (target_width - measured_width) / (gap_count * font_size)
+    return max(-0.08, min(0.08, spacing))
+
+
+def insert_embedded_encoded_text(
+    doc: fitz.Document,
+    page: fitz.Page,
+    op: EditOperation,
+    font_info: dict[str, Any],
+    rect: fitz.Rect,
+) -> bool:
+    if not op.fontResource:
+        return False
+    text = op.text or ""
+    if not text:
+        return False
+
+    code_map = embedded_font_code_map(doc, font_info)
+    encoded_lines = [encode_embedded_text(line, code_map) for line in text.split("\n")]
+    if any(line is None for line in encoded_lines):
+        return False
+
+    char_spacing = embedded_char_spacing(doc, op, rect, encoded_lines)
+    commands = embedded_text_commands(op, page, rect, encoded_lines, char_spacing)
+    append_page_content_stream(doc, page, "\n".join(commands).encode("ascii"))
+    return True
 
 
 def span_ink_density(page: fitz.Page, rect: fitz.Rect) -> float:
@@ -512,10 +727,16 @@ def insert_text_operation(
     font_size = float(op.fontSize or max(8, rect.height * 0.72))
     flags = int(op.fontFlags or 0)
     font_file: str | None = None
-    if op.fontResource:
+    font_info = operation_font_info(page, op)
+    can_reuse_font = can_reuse_embedded_font_for_text(font_info)
+    if font_info and insert_embedded_encoded_text(doc, page, op, font_info, rect):
+        return
+    if font_info and font_info.get("to_unicode_xref"):
+        can_reuse_font = False
+    if op.fontResource and can_reuse_font:
         font_name = op.fontResource
     else:
-        font_file = extracted_font_path(doc, op.fontXref, document_id)
+        font_file = extracted_font_path(doc, op.fontXref, document_id) if can_reuse_font else None
         if font_file:
             font_name = f"F{hashlib.sha1(font_file.encode()).hexdigest()[:8]}"
         else:

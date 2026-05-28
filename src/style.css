@@ -304,6 +304,8 @@ button:disabled {
 }
 
 .page-shell {
+  content-visibility: auto;
+  contain-intrinsic-size: 900px 1180px;
   margin: 0 auto 28px;
   width: fit-content;
 }
@@ -320,6 +322,7 @@ button:disabled {
 .pdf-page {
   background: white;
   box-shadow: var(--shadow);
+  contain: layout style;
   position: relative;
   transform-origin: top left;
 }
@@ -501,6 +504,7 @@ button:disabled {
 
 .text-box.is-changed:hover .revert-edit-button,
 .text-box.is-deleted:hover .revert-edit-button,
+.text-box.is-selected .revert-edit-button,
 .image-box.is-changed:hover .revert-edit-button,
 .image-box.is-deleted:hover .revert-edit-button,
 .operation-box:hover .revert-edit-button {

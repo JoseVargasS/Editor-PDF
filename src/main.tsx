@@ -189,6 +189,7 @@ const AUTO_PREVIEW = false
 const PAGE_IMAGE_SCALE = 1.25
 const PREVIEW_SCALE = 2
 const resizeHandles: ResizeHandle[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
+let measureCanvasContext: CanvasRenderingContext2D | null = null
 
 const tools: Array<{ id: Tool; label: string; icon: React.ComponentType<{ size?: number }> }> = [
   { id: 'select', label: 'Seleccionar', icon: MousePointer2 },
@@ -271,9 +272,15 @@ function readImage(file: File): Promise<PendingImage> {
   })
 }
 
+function textMeasureContext() {
+  if (!measureCanvasContext) {
+    measureCanvasContext = document.createElement('canvas').getContext('2d')
+  }
+  return measureCanvasContext
+}
+
 function measureInlineTextWidth(edit: TextEdit, value: string, zoom: number) {
-  const canvas = document.createElement('canvas')
-  const context = canvas.getContext('2d')
+  const context = textMeasureContext()
   if (!context) {
     return Math.max(width(edit.span.rect), value.length * edit.fontSize * 0.62)
   }
@@ -284,8 +291,7 @@ function measureInlineTextWidth(edit: TextEdit, value: string, zoom: number) {
 }
 
 function measureOperationTextWidth(operation: EditorOperation, value: string, zoom: number) {
-  const canvas = document.createElement('canvas')
-  const context = canvas.getContext('2d')
+  const context = textMeasureContext()
   const fontSize = operation.fontSize ?? 14
   if (!context) {
     return Math.max(width(operation.rect), value.length * fontSize * 0.62)
@@ -310,6 +316,15 @@ function normalizedFontName(name: string | undefined) {
 
 function previewFontFamily(name: string | undefined) {
   const key = normalizedFontName(name)
+  if (key.includes('neueplak') && key.includes('cond')) {
+    return '"Arial Narrow", "Bahnschrift Condensed", "Aptos Narrow", Arial, sans-serif'
+  }
+  if (key.includes('neueplak')) {
+    return 'Bahnschrift, Aptos, Arial, sans-serif'
+  }
+  if (key.includes('omnes')) {
+    return '"Segoe UI", Aptos, Arial, sans-serif'
+  }
   if (key.includes('courier') || key.includes('mono')) {
     return '"Courier New", Consolas, monospace'
   }
@@ -347,6 +362,14 @@ function previewFontStyle(name: string | undefined, flags = 0) {
   return flags & 2 || key.includes('italic') || key.includes('oblique') ? 'italic' : 'normal'
 }
 
+function previewFontStretch(name: string | undefined) {
+  const key = normalizedFontName(name)
+  if (key.includes('condensed') || key.includes('cond') || key.includes('narrow')) {
+    return 'condensed'
+  }
+  return 'normal'
+}
+
 function textRenderStyle(
   fontFamily: string | undefined,
   fontSize: number | undefined,
@@ -359,6 +382,7 @@ function textRenderStyle(
     color,
     fontFamily: previewFontFamily(fontFamily),
     fontSize: `${(fontSize ?? 11) * zoom}px`,
+    fontStretch: previewFontStretch(fontFamily),
     fontStyle: previewFontStyle(fontFamily, flags),
     fontWeight: previewFontWeight(fontFamily, flags, density),
   }
@@ -473,6 +497,19 @@ function App() {
   }, [])
 
   useEffect(() => {
+    function endPointerInteraction() {
+      setDrag(null)
+    }
+
+    window.addEventListener('pointerup', endPointerInteraction)
+    window.addEventListener('pointercancel', endPointerInteraction)
+    return () => {
+      window.removeEventListener('pointerup', endPointerInteraction)
+      window.removeEventListener('pointercancel', endPointerInteraction)
+    }
+  }, [])
+
+  useEffect(() => {
     if (!documentInfo) {
       setPreviewImages((current) => {
         Object.values(current).forEach(URL.revokeObjectURL)
@@ -483,13 +520,13 @@ function App() {
       return
     }
 
-    const currentOperations = buildOperations()
-    if (!currentOperations.length) {
+    if (!AUTO_PREVIEW) {
       clearPreviewImages()
       return
     }
 
-    if (!AUTO_PREVIEW) {
+    const currentOperations = buildOperations()
+    if (!currentOperations.length) {
       clearPreviewImages()
       return
     }
@@ -686,6 +723,10 @@ function App() {
     if (previewMode) {
       return
     }
+    if (inlineEditingId !== span.id) {
+      setInlineEditingId(null)
+    }
+    setInlineEditingOperationId(null)
     commitTextEdit(getTextEdit(span))
     setSelected({ kind: 'text', id: span.id })
     setTool('select')
@@ -929,7 +970,7 @@ function App() {
   function fitInlineTextRect(edit: TextEdit, value: string, page: PageInfo): Rect {
     const singleLineValue = value.replace(/[\r\n]+/g, ' ')
     const measuredWidth = measureInlineTextWidth(edit, singleLineValue, zoom)
-    const nextWidth = Math.max(width(edit.span.rect), width(edit.rect), measuredWidth)
+    const nextWidth = Math.max(width(edit.span.rect), measuredWidth)
     return {
       ...edit.rect,
       x1: Math.min(page.width, edit.rect.x0 + nextWidth),
@@ -1080,6 +1121,7 @@ function App() {
     if (previewMode) {
       return
     }
+    setInlineEditingId(null)
     setInlineEditingOperationId(null)
     if (!documentInfo || event.target !== event.currentTarget) {
       return
@@ -1378,6 +1420,8 @@ function App() {
                   setTool('select')
                 }}
                 onPointerDown={(event) => {
+                  setInlineEditingId(null)
+                  setInlineEditingOperationId(null)
                   commitImageEdit(edit)
                   startMove(event, 'image', image.id, page)
                 }}
@@ -1435,6 +1479,12 @@ function App() {
                 }}
                 onPointerDown={(event) => {
                   if (inlineEditingId === span.id) {
+                    return
+                  }
+                  setInlineEditingId(null)
+                  setInlineEditingOperationId(null)
+                  if (event.detail > 1) {
+                    event.stopPropagation()
                     return
                   }
                   commitTextEdit(edit)
@@ -1536,6 +1586,12 @@ function App() {
                   }}
                   onPointerDown={(event) => {
                     if (inlineEditingOperationId === operation.id) {
+                      return
+                    }
+                    setInlineEditingId(null)
+                    setInlineEditingOperationId(null)
+                    if (event.detail > 1) {
+                      event.stopPropagation()
                       return
                     }
                     startMove(event, 'operation', operation.id, page)
