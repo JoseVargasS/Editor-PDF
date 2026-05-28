@@ -53,7 +53,7 @@ El backend sirve el frontend compilado desde `dist/` cuando existe. No crear un 
 
 - Usa patrones existentes; evita reescrituras grandes si un cambio puntual basta.
 - No agregues dependencias si PyMuPDF, React o CSS nativo resuelven el problema.
-- Mantén los controles visuales pequenos: los PDFs pueden tener boxes muy chicos y densos.
+- Manten los controles visuales pequenos: los PDFs pueden tener boxes muy chicos y densos.
 - Conserva el flujo de doble click para editar texto y click fuera para confirmar.
 - Las flechas del teclado deben servir para precision, no deben interferir con inputs activos.
 - No borres cambios del usuario ni reviertas archivos completos sin permiso.
@@ -71,11 +71,20 @@ La exportacion de texto usa redaccion + reinsercion:
 
 La negrita visual no debe decidirse solo por nombre de fuente. Algunos PDFs usan `ArialMT` normal con tinta densa. La funcion mide `fontInkDensity` y prueba variantes de trazo hasta acercarse al original.
 
+Fuentes embebidas y subsets:
+
+- Si una fuente tiene `ToUnicode`, intenta reutilizar el recurso original codificando el texto nuevo con los codigos internos del PDF.
+- No uses Unicode directo contra recursos subset si el texto puede desaparecer, cambiar a cuadros o perder letras.
+- Si el texto nuevo contiene glifos que no existen en el subset embebido, usa fallback local parecido; no fuerces la fuente original.
+- Para textos pequenos tipo codigos numericos largos, conserva la calibracion compacta para evitar que queden anchos, bajos o achatados.
+- Evita `Tz` como solucion general de ancho porque deforma glifos; prefiere ajustar espaciado (`Tc`) cuando aplique.
+
 Al modificar la calibracion:
 
 - Prueba textos tipo titulo (`Estado de Cuenta Tarjeta Visa`).
 - Prueba labels medianos (`Linea de credito`).
 - Prueba texto monoespaciado/italico de tablas.
+- Prueba tickets con fuentes subset (`NeuePlak`, `Omnes`) y codigos numericos bajo QR.
 - Reporta densidad objetivo y densidad nueva.
 
 ## Detalles criticos del frontend
@@ -89,6 +98,16 @@ Los cambios de texto viven en `textEdits`. Cada `TextEdit` conserva:
 - `fontFamily`, `fontSize`, `fontFlags`, `fontXref`, `fontResource`, `fontInkDensity`, `color`.
 
 Los cambios exportables se construyen en `buildOperations()`.
+
+Interaccion:
+
+- El doble click sobre texto abre editor inline; click fuera confirma.
+- El estado `drag` debe limpiarse tambien con `pointerup`/`pointercancel` global para evitar hojas bloqueadas si el evento se captura fuera de la pagina.
+- No desactives eventos de `.text-box` sin reemplazar completamente la seleccion; son el punto de entrada principal para editar boxes.
+- La preview automatica puede estar desactivada; si `AUTO_PREVIEW` es `false`, evita construir operaciones solo para descartarlas.
+- El zoom debe mantenerse sincronizado entre botones, rueda y campo numerico porcentual. Usa `MIN_ZOOM`, `MAX_ZOOM` y `clampZoom`; no dupliques limites magicos.
+- En UI, la herramienta `redact` debe mostrarse como `Ocultar` porque cubre/censura contenido, no edita texto narrativo.
+- `highlight`, `redact` y `rectangle` son herramientas de dibujo: deben poder iniciar el trazo sobre boxes de texto, imagenes, vectores u operaciones existentes, sin disparar seleccion/movimiento.
 
 Movimiento:
 
@@ -111,6 +130,12 @@ Minimo:
 ```powershell
 npm run build
 python -m py_compile server\app.py
+```
+
+Si `npm run build` falla por el wrapper de PowerShell de npm, repetir con:
+
+```powershell
+npm.cmd run build
 ```
 
 Si se tocan puertos o scripts de dev, comprobar:

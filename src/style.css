@@ -153,6 +153,34 @@ button:disabled {
   color: #1d4ed8;
 }
 
+.tool-button.tool-highlight.is-active {
+  background: #fef9c3;
+  border-color: #eab308;
+  color: #854d0e;
+}
+
+.tool-button.tool-redact.is-active {
+  background: #f3f4f6;
+  border-color: #111827;
+  color: #111827;
+}
+
+.tool-color {
+  border: 1px solid rgba(15, 23, 42, 0.18);
+  border-radius: 999px;
+  display: inline-block;
+  height: 10px;
+  width: 10px;
+}
+
+.tool-color-highlight {
+  background: #fde047;
+}
+
+.tool-color-redact {
+  background: #111111;
+}
+
 .tool-button.primary {
   background: var(--blue);
   border-color: var(--blue);
@@ -169,11 +197,38 @@ button:disabled {
   font-weight: 650;
 }
 
-.zoom-readout {
+.zoom-control {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 6px;
   color: var(--muted);
+  display: inline-flex;
   font-size: 13px;
-  min-width: 44px;
-  text-align: center;
+  height: 36px;
+  justify-content: center;
+  min-width: 72px;
+  padding: 0 8px;
+}
+
+.zoom-control:focus-within {
+  border-color: #93c5fd;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
+}
+
+.zoom-control input {
+  background: transparent;
+  border: 0;
+  color: var(--ink);
+  font: inherit;
+  outline: 0;
+  text-align: right;
+  width: 38px;
+}
+
+.zoom-control span {
+  color: var(--muted);
+  margin-left: 1px;
 }
 
 .status {
@@ -303,6 +358,36 @@ button:disabled {
   padding: 28px;
 }
 
+.brush-help {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.12);
+  color: var(--ink);
+  display: flex;
+  font-size: 13px;
+  font-weight: 700;
+  gap: 7px;
+  margin: 0 auto 14px;
+  padding: 7px 12px;
+  pointer-events: none;
+  position: sticky;
+  top: 12px;
+  width: fit-content;
+  z-index: 12;
+}
+
+.brush-help-highlight {
+  border-color: #eab308;
+  color: #854d0e;
+}
+
+.brush-help-redact {
+  border-color: #111827;
+  color: #111827;
+}
+
 .page-shell {
   content-visibility: auto;
   contain-intrinsic-size: 900px 1180px;
@@ -329,6 +414,24 @@ button:disabled {
 
 .pdf-page.is-preview-mode {
   outline: 2px solid rgba(5, 150, 105, 0.35);
+}
+
+.pdf-page.is-draw-tool,
+.pdf-page.is-draw-tool .text-box,
+.pdf-page.is-draw-tool .image-box,
+.pdf-page.is-draw-tool .drawing-box,
+.pdf-page.is-draw-tool .operation-box,
+.pdf-page.is-marker-tool,
+.pdf-page.is-marker-tool .text-box,
+.pdf-page.is-marker-tool .image-box,
+.pdf-page.is-marker-tool .drawing-box,
+.pdf-page.is-marker-tool .operation-box,
+.pdf-page.is-redact-tool,
+.pdf-page.is-redact-tool .text-box,
+.pdf-page.is-redact-tool .image-box,
+.pdf-page.is-redact-tool .drawing-box,
+.pdf-page.is-redact-tool .operation-box {
+  cursor: crosshair;
 }
 
 .page-bitmap {

@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
+  Brush,
   Download,
-  Eraser,
   FileUp,
   Highlighter,
   ImagePlus,
@@ -188,15 +188,22 @@ const API_DIRECT = 'http://127.0.0.1:8000/api'
 const AUTO_PREVIEW = false
 const PAGE_IMAGE_SCALE = 1.25
 const PREVIEW_SCALE = 2
+const MIN_ZOOM = 0.45
+const MAX_ZOOM = 2.2
 const resizeHandles: ResizeHandle[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
 let measureCanvasContext: CanvasRenderingContext2D | null = null
 
-const tools: Array<{ id: Tool; label: string; icon: React.ComponentType<{ size?: number }> }> = [
+const tools: Array<{
+  id: Tool
+  label: string
+  icon: React.ComponentType<{ size?: number }>
+  tone?: 'highlight' | 'redact'
+}> = [
   { id: 'select', label: 'Seleccionar', icon: MousePointer2 },
   { id: 'text', label: 'Texto', icon: Type },
   { id: 'rectangle', label: 'Cuadro', icon: Square },
-  { id: 'highlight', label: 'Resaltar', icon: Highlighter },
-  { id: 'redact', label: 'Redactar', icon: Eraser },
+  { id: 'highlight', label: 'Marcador', icon: Highlighter, tone: 'highlight' },
+  { id: 'redact', label: 'Ocultar', icon: Brush, tone: 'redact' },
 ]
 
 function uid(prefix: string) {
@@ -224,6 +231,15 @@ function normalizeRect(a: Point, b: Point): Rect {
   }
 }
 
+function rectEquals(a: Rect, b: Rect, epsilon = 0.001) {
+  return (
+    Math.abs(a.x0 - b.x0) <= epsilon &&
+    Math.abs(a.y0 - b.y0) <= epsilon &&
+    Math.abs(a.x1 - b.x1) <= epsilon &&
+    Math.abs(a.y1 - b.y1) <= epsilon
+  )
+}
+
 function clampRect(rect: Rect, page: PageInfo): Rect {
   const w = width(rect)
   const h = height(rect)
@@ -236,6 +252,10 @@ function clampValue(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value))
 }
 
+function clampZoom(value: number) {
+  return clampValue(value, MIN_ZOOM, MAX_ZOOM)
+}
+
 function rectStyle(rect: Rect, zoom: number): React.CSSProperties {
   return {
     left: `${rect.x0 * zoom}px`,
@@ -245,12 +265,20 @@ function rectStyle(rect: Rect, zoom: number): React.CSSProperties {
   }
 }
 
-function pointFromEvent(event: React.PointerEvent<HTMLElement>, pageElement: HTMLElement, zoom: number): Point {
+function pointFromClient(clientX: number, clientY: number, pageElement: HTMLElement, zoom: number): Point {
   const bounds = pageElement.getBoundingClientRect()
   return {
-    x: (event.clientX - bounds.left) / zoom,
-    y: (event.clientY - bounds.top) / zoom,
+    x: (clientX - bounds.left) / zoom,
+    y: (clientY - bounds.top) / zoom,
   }
+}
+
+function pointFromEvent(event: React.PointerEvent<HTMLElement>, pageElement: HTMLElement, zoom: number): Point {
+  return pointFromClient(event.clientX, event.clientY, pageElement, zoom)
+}
+
+function isDrawTool(value: Tool): value is Extract<Tool, 'rectangle' | 'highlight' | 'redact'> {
+  return value === 'rectangle' || value === 'highlight' || value === 'redact'
 }
 
 function inflate(rect: Rect, value: number): Rect {
@@ -402,6 +430,7 @@ function App() {
   const [documentInfo, setDocumentInfo] = useState<PdfDocument | null>(null)
   const [tool, setTool] = useState<Tool>('select')
   const [zoom, setZoom] = useState(1)
+  const [zoomInput, setZoomInput] = useState('100')
   const [selected, setSelected] = useState<Selection>(null)
   const [textEdits, setTextEdits] = useState<Record<string, TextEdit>>({})
   const [imageEdits, setImageEdits] = useState<Record<string, ImageEdit>>({})
@@ -421,6 +450,7 @@ function App() {
   const imageInputRef = useRef<HTMLInputElement>(null)
   const inlineEditorRef = useRef<HTMLInputElement>(null)
   const canvasAreaRef = useRef<HTMLElement>(null)
+  const zoomRef = useRef(1)
   const fileDragDepthRef = useRef(0)
 
   const selectedText = selected?.kind === 'text' ? textEdits[selected.id] : null
@@ -825,6 +855,66 @@ function App() {
     )
   }
 
+  function setZoomLevel(nextZoom: number) {
+    const next = clampZoom(nextZoom)
+    zoomRef.current = next
+    setZoom(next)
+    setZoomInput(String(Math.round(next * 100)))
+  }
+
+  function nudgeZoom(delta: number) {
+    setZoomLevel(zoomRef.current + delta)
+  }
+
+  function updateZoomInput(value: string) {
+    const normalized = value.replace(/[^\d]/g, '').slice(0, 3)
+    setZoomInput(normalized)
+    if (!normalized) {
+      return
+    }
+    const percentage = Number(normalized)
+    if (!Number.isFinite(percentage)) {
+      return
+    }
+    if (percentage >= MIN_ZOOM * 100 && percentage <= MAX_ZOOM * 100) {
+      zoomRef.current = percentage / 100
+      setZoom(percentage / 100)
+    }
+  }
+
+  function commitZoomInput() {
+    if (!zoomInput) {
+      setZoomInput(String(Math.round(zoom * 100)))
+      return
+    }
+    const percentage = Number(zoomInput)
+    if (!Number.isFinite(percentage)) {
+      setZoomInput(String(Math.round(zoom * 100)))
+      return
+    }
+    setZoomLevel(percentage / 100)
+  }
+
+  function handleZoomInputKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === 'Enter') {
+      event.currentTarget.blur()
+      return
+    }
+    if (event.key === 'Escape') {
+      setZoomInput(String(Math.round(zoom * 100)))
+      event.currentTarget.blur()
+    }
+  }
+
+  function selectTool(nextTool: Tool) {
+    setTool(nextTool)
+    if (nextTool === 'highlight') {
+      setMessage('Marcador amarillo activo')
+    } else if (nextTool === 'redact') {
+      setMessage('Pincel negro activo')
+    }
+  }
+
   function zoomCanvasAt(clientX: number, clientY: number, deltaY: number) {
     const area = canvasAreaRef.current
     if (!area) {
@@ -833,15 +923,14 @@ function App() {
     const bounds = area.getBoundingClientRect()
     const pointerX = clientX - bounds.left + area.scrollLeft
     const pointerY = clientY - bounds.top + area.scrollTop
-    setZoom((current) => {
-      const factor = deltaY < 0 ? 1.08 : 0.925
-      const next = Math.max(0.45, Math.min(2.2, current * factor))
-      window.requestAnimationFrame(() => {
-        const ratio = next / current
-        area.scrollLeft = pointerX * ratio - (clientX - bounds.left)
-        area.scrollTop = pointerY * ratio - (clientY - bounds.top)
-      })
-      return next
+    const current = zoomRef.current
+    const factor = deltaY < 0 ? 1.08 : 0.925
+    const next = clampZoom(current * factor)
+    setZoomLevel(next)
+    window.requestAnimationFrame(() => {
+      const ratio = next / current
+      area.scrollLeft = pointerX * ratio - (clientX - bounds.left)
+      area.scrollTop = pointerY * ratio - (clientY - bounds.top)
     })
   }
 
@@ -1117,13 +1206,45 @@ function App() {
     setMessage('Cambios reiniciados')
   }
 
+  function startDrawFromEvent(
+    event: React.PointerEvent<HTMLElement>,
+    page: PageInfo,
+    drawTool: Extract<Tool, 'rectangle' | 'highlight' | 'redact'>,
+  ) {
+    const pageElement = event.currentTarget.classList.contains('pdf-page')
+      ? event.currentTarget
+      : event.currentTarget.closest<HTMLElement>('.pdf-page')
+    if (!pageElement) {
+      return false
+    }
+    const point = pointFromClient(event.clientX, event.clientY, pageElement, zoom)
+    setInlineEditingId(null)
+    setInlineEditingOperationId(null)
+    setDrag({ kind: 'draw', tool: drawTool, pageIndex: page.index, start: point, current: point })
+    pageElement.setPointerCapture(event.pointerId)
+    event.preventDefault()
+    event.stopPropagation()
+    return true
+  }
+
+  function startDrawFromOverlay(event: React.PointerEvent<HTMLElement>, page: PageInfo) {
+    return isDrawTool(tool) ? startDrawFromEvent(event, page, tool) : false
+  }
+
   function pagePointerDown(event: React.PointerEvent<HTMLDivElement>, page: PageInfo) {
     if (previewMode) {
       return
     }
     setInlineEditingId(null)
     setInlineEditingOperationId(null)
-    if (!documentInfo || event.target !== event.currentTarget) {
+    if (!documentInfo) {
+      return
+    }
+    if (isDrawTool(tool)) {
+      startDrawFromEvent(event, page, tool)
+      return
+    }
+    if (event.target !== event.currentTarget) {
       return
     }
     const point = pointFromEvent(event, event.currentTarget, zoom)
@@ -1158,11 +1279,6 @@ function App() {
       setOperations((current) => [...current, operation])
       setSelected({ kind: 'operation', id: operation.id })
       setTool('select')
-      return
-    }
-    if (tool === 'rectangle' || tool === 'highlight' || tool === 'redact') {
-      setDrag({ kind: 'draw', tool, pageIndex: page.index, start: point, current: point })
-      event.currentTarget.setPointerCapture(event.pointerId)
       return
     }
     setSelected(null)
@@ -1271,7 +1387,7 @@ function App() {
           edit.fontFamily !== edit.span.fontFamily ||
           edit.fontSize !== edit.span.fontSize ||
           edit.color !== edit.span.color ||
-          JSON.stringify(edit.rect) !== JSON.stringify(edit.span.rect)
+          !rectEquals(edit.rect, edit.span.rect)
         )
       })
       .map<EditorOperation>((edit) => ({
@@ -1293,7 +1409,7 @@ function App() {
       }))
 
     const imageOps = Object.values(imageEdits)
-      .filter((edit) => edit.deleted || JSON.stringify(edit.rect) !== JSON.stringify(edit.image.rect))
+      .filter((edit) => edit.deleted || !rectEquals(edit.rect, edit.image.rect))
       .map<EditorOperation>((edit) => ({
         id: `op-${edit.image.id}`,
         type: edit.deleted ? 'delete_image' : 'move_image',
@@ -1363,6 +1479,8 @@ function App() {
     }
     const draft =
       drag?.kind === 'draw' && drag.pageIndex === page.index ? normalizeRect(drag.start, drag.current) : null
+    const pageToolClass =
+      tool === 'highlight' ? 'is-marker-tool' : tool === 'redact' ? 'is-redact-tool' : tool === 'rectangle' ? 'is-draw-tool' : ''
 
     return (
       <section className="page-shell" key={page.index}>
@@ -1373,7 +1491,7 @@ function App() {
           </span>
         </div>
         <div
-          className={`pdf-page ${previewMode ? 'is-preview-mode' : ''}`}
+          className={`pdf-page ${previewMode ? 'is-preview-mode' : ''} ${pageToolClass}`}
           style={pageStyle}
           onPointerDown={(event) => pagePointerDown(event, page)}
           onPointerMove={(event) => pagePointerMove(event, page)}
@@ -1399,13 +1517,18 @@ function App() {
                 event.stopPropagation()
                 setSelected({ kind: 'drawing', id: drawing.id })
               }}
+              onPointerDown={(event) => {
+                if (startDrawFromOverlay(event, page)) {
+                  return
+                }
+              }}
               title="Vector"
             />
           ))}
           {!previewMode && page.images.map((image) => {
             const edit = getImageEdit(image)
             const selectedImageBox = selected?.kind === 'image' && selected.id === image.id
-            const imageChanged = edit.deleted || JSON.stringify(edit.rect) !== JSON.stringify(image.rect)
+            const imageChanged = edit.deleted || !rectEquals(edit.rect, image.rect)
             return (
               <div
                 role="button"
@@ -1420,6 +1543,9 @@ function App() {
                   setTool('select')
                 }}
                 onPointerDown={(event) => {
+                  if (startDrawFromOverlay(event, page)) {
+                    return
+                  }
                   setInlineEditingId(null)
                   setInlineEditingOperationId(null)
                   commitImageEdit(edit)
@@ -1455,7 +1581,7 @@ function App() {
               edit.fontFamily !== span.fontFamily ||
               edit.fontSize !== span.fontSize ||
               edit.color !== span.color ||
-              JSON.stringify(edit.rect) !== JSON.stringify(span.rect)
+              !rectEquals(edit.rect, span.rect)
             return (
               <div
                 role="button"
@@ -1478,6 +1604,9 @@ function App() {
                   }
                 }}
                 onPointerDown={(event) => {
+                  if (startDrawFromOverlay(event, page)) {
+                    return
+                  }
                   if (inlineEditingId === span.id) {
                     return
                   }
@@ -1585,6 +1714,9 @@ function App() {
                     }
                   }}
                   onPointerDown={(event) => {
+                    if (startDrawFromOverlay(event, page)) {
+                      return
+                    }
                     if (inlineEditingOperationId === operation.id) {
                       return
                     }
@@ -1718,14 +1850,21 @@ function App() {
           <div className="tool-group">
             {tools.map((item) => {
               const Icon = item.icon
+              const title =
+                item.id === 'highlight'
+                  ? 'Marcador amarillo'
+                  : item.id === 'redact'
+                    ? 'Pincel negro para ocultar'
+                    : item.label
               return (
                 <button
-                  className={`tool-button ${tool === item.id ? 'is-active' : ''}`}
+                  className={`tool-button ${item.tone ? `tool-${item.tone}` : ''} ${tool === item.id ? 'is-active' : ''}`}
                   key={item.id}
-                  onClick={() => setTool(item.id)}
-                  title={item.label}
+                  onClick={() => selectTool(item.id)}
+                  title={title}
                 >
                   <Icon size={18} />
+                  {item.tone ? <span className={`tool-color tool-color-${item.tone}`} aria-hidden="true" /> : null}
                   <span>{item.label}</span>
                 </button>
               )
@@ -1747,15 +1886,30 @@ function App() {
               }
             }}
           />
-                  <button className="tool-button command" onClick={() => imageInputRef.current?.click()} title="Cargar imagen">
-                    <ImagePlus size={18} />
-                    <span>Imagen</span>
-                  </button>
-          <button className="tool-button" onClick={() => setZoom((value) => Math.max(0.45, value - 0.1))} title="Alejar">
+          <button className="tool-button command" onClick={() => imageInputRef.current?.click()} title="Cargar imagen">
+            <ImagePlus size={18} />
+            <span>Imagen</span>
+          </button>
+          <button className="tool-button" onClick={() => nudgeZoom(-0.1)} title="Alejar">
             <Minus size={18} />
           </button>
-          <span className="zoom-readout">{Math.round(zoom * 100)}%</span>
-          <button className="tool-button" onClick={() => setZoom((value) => Math.min(2.2, value + 0.1))} title="Acercar">
+          <label className="zoom-control" title="Zoom">
+            <input
+              aria-label="Zoom en porcentaje"
+              inputMode="numeric"
+              max={MAX_ZOOM * 100}
+              min={MIN_ZOOM * 100}
+              onBlur={commitZoomInput}
+              onChange={(event) => updateZoomInput(event.currentTarget.value)}
+              onFocus={(event) => event.currentTarget.select()}
+              onKeyDown={handleZoomInputKeyDown}
+              pattern="[0-9]*"
+              type="text"
+              value={zoomInput}
+            />
+            <span>%</span>
+          </label>
+          <button className="tool-button" onClick={() => nudgeZoom(0.1)} title="Acercar">
             <Plus size={18} />
           </button>
           <button
@@ -1828,6 +1982,12 @@ function App() {
         </aside>
 
         <section className="canvas-area" ref={canvasAreaRef}>
+          {documentInfo && (tool === 'highlight' || tool === 'redact') ? (
+            <div className={`brush-help brush-help-${tool}`} role="status">
+              {tool === 'highlight' ? <Highlighter size={16} /> : <Brush size={16} />}
+              <span>{tool === 'highlight' ? 'Marcador amarillo' : 'Pincel negro'}</span>
+            </div>
+          ) : null}
           {documentInfo ? (
             documentInfo.pages.map((page) => (
               <div id={`page-${page.index}`} key={page.index}>

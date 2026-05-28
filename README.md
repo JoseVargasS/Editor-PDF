@@ -15,7 +15,11 @@ La app esta pensada para correr en tu maquina, sin subir documentos a servicios 
 - Redimensiona boxes con campos del inspector, `Ctrl`/`Cmd` + flechas y agarraderas pequenas tipo editor clasico.
 - Exporta reemplazos de texto con redaccion transparente del texto original y reinsercion calibrada.
 - Preserva lineas/vectoriales cruzadas al aplicar redacciones de texto.
-- Permite agregar texto, imagenes, rectangulos, resaltados y areas de redaccion.
+- Reusa fuentes embebidas subset cuando el PDF trae mapa `ToUnicode`, codificando texto nuevo con los codigos internos del PDF.
+- Usa fallback de fuente local parecida cuando el texto nuevo contiene glifos que no existen en el subset embebido.
+- Calibra textos pequenos tipo codigos numericos para evitar que queden anchos, bajos o deformados.
+- Permite agregar texto, imagenes, rectangulos, resaltados y areas para ocultar/censurar contenido.
+- Las herramientas `Marcador` y `Ocultar` funcionan como pinceles: se arrastra directamente sobre el area del PDF, incluso empezando encima de texto detectado.
 - Incluye favicon local para evitar errores 404.
 
 ## Comandos
@@ -54,6 +58,12 @@ Compilar frontend:
 
 ```powershell
 npm run build
+```
+
+Si PowerShell muestra avisos del wrapper de npm, se puede usar directamente:
+
+```powershell
+npm.cmd run build
 ```
 
 Validar sintaxis Python:
@@ -145,6 +155,18 @@ Revertir:
 
 - Al pasar el mouse por un box modificado aparece un boton pequeno de revertir en la esquina superior derecha.
 
+Marcado:
+
+- `Marcador`: crea una franja amarilla semitransparente sobre el area seleccionada.
+- `Ocultar`: crea una franja negra opaca para cubrir contenido.
+- Ambas herramientas pueden empezar el trazo encima de textos, imagenes u operaciones existentes.
+
+Zoom:
+
+- Botones `-` / `+`: acercan o alejan en pasos rapidos.
+- `Ctrl`/`Cmd` + rueda: acerca o aleja manteniendo el punto bajo el cursor.
+- Campo porcentual: permite escribir un valor exacto entre `45` y `220`.
+
 ## Arquitectura
 
 ### Frontend
@@ -160,6 +182,9 @@ Responsabilidades:
 - Crear operaciones exportables a partir de los cambios del usuario.
 - Solicitar previews renderizadas cuando hay cambios.
 - Permitir movimiento, resize, edicion inline, inspector y teclado.
+- Cerrar interacciones de puntero a nivel global para evitar estados de drag pegados si el `pointerup` cae fuera del box.
+- Evitar trabajo innecesario de preview automatico cuando `AUTO_PREVIEW` esta desactivado.
+- Sincronizar el zoom entre botones, rueda y campo porcentual editable.
 
 Archivo de estilos: `src/style.css`
 
@@ -168,6 +193,7 @@ Responsabilidades:
 - Layout de app, toolbar, sidebar, canvas, inspector y drop zone.
 - Estilos de boxes, seleccion, handles, botones de revertir y overlays.
 - Mantener controles pequenos para no tapar contenido de PDFs densos.
+- Usar `content-visibility` y containment para que documentos largos sean mas livianos en navegadores modernos.
 
 ### Backend
 
@@ -200,8 +226,22 @@ Endpoints:
 4. Al editar, el frontend manda una operacion `replace_text`.
 5. El backend aplica una redaccion transparente sobre el texto original.
 6. Luego reinserta el texto nuevo en el origen original cuando es una sola linea.
-7. Para conservar negrita visual, calibra el texto nuevo contra la densidad de tinta del span original.
-8. La redaccion se aplica con `PDF_REDACT_LINE_ART_NONE` para no borrar lineas vectoriales que cruzan el texto.
+7. Si la fuente embebida tiene `ToUnicode`, intenta codificar el texto nuevo con los codigos internos del PDF y reutilizar el recurso original.
+8. Si el subset no contiene algun glifo nuevo, usa una fuente local parecida en vez de producir letras faltantes o cuadros.
+9. Para conservar negrita visual, calibra el texto nuevo contra la densidad de tinta del span original.
+10. La redaccion se aplica con `PDF_REDACT_LINE_ART_NONE` para no borrar lineas vectoriales que cruzan el texto.
+
+## Fidelidad de fuentes embebidas
+
+Muchos PDFs no incluyen una fuente completa, sino un subset con solo los glifos usados en el documento. Por eso la app sigue este orden:
+
+1. Reusar el recurso de fuente del PDF cuando la codificacion lo permite.
+2. Si hay mapa `ToUnicode`, traducir caracteres Unicode a los codigos internos del subset y escribir un stream PDF propio.
+3. Ajustar espaciado (`Tc`) para acercarse al ancho original sin deformar glifos.
+4. Para codigos numericos pequenos, replicar la combinacion de tamano y escala compacta que suelen traer los tickets.
+5. Si el texto nuevo usa glifos ausentes del subset, resolver a una fuente local parecida.
+
+Este flujo evita cuadros, letras faltantes y texto demasiado ancho. La fidelidad maxima se obtiene cuando el texto nuevo usa caracteres que ya existen en el subset original.
 
 ## Calibracion de negrita
 
@@ -223,6 +263,7 @@ Esa carpeta es runtime local y esta ignorada por git. Puede borrarse sin afectar
 
 - Un PDF no guarda texto como un documento Word; guarda comandos de dibujo. Por eso la app reconstruye ediciones con redaccion + reinsercion.
 - La deteccion perfecta de fuente depende de que el PDF incluya o permita extraer la fuente original.
+- Si una fuente embebida es subset y el usuario escribe letras que no existen en ese subset, el backend debe usar una fuente fallback parecida.
 - Si un texto esta dividido en varios spans, cada span se edita como box independiente.
 - PDFs escaneados como imagen no tienen texto editable hasta que se agregue OCR.
 - Algunos efectos avanzados del PDF original, como transformaciones raras, kerning muy especifico o texto en paths, pueden requerir mas heuristicas.
