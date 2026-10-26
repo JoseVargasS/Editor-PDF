@@ -184,7 +184,11 @@ type DragState =
   | null
 
 const API_PROXY = '/api'
-const API_DIRECT = 'http://127.0.0.1:8000/api'
+// Solo en dev se puede saltar el proxy de Vite; en produccion localhost seria la maquina del visitante.
+const API_DIRECT = import.meta.env.DEV ? 'http://127.0.0.1:8000/api' : API_PROXY
+const API_DOWN_MESSAGE = import.meta.env.DEV
+  ? 'API desconectada. Arranca con: npm run dev:all'
+  : 'El servidor esta iniciando. Espera unos segundos y vuelve a intentar.'
 const AUTO_PREVIEW = false
 const PAGE_IMAGE_SCALE = 1.25
 const PREVIEW_SCALE = 2
@@ -615,7 +619,7 @@ function App() {
       let usedApiBase = apiBase
       let response = await fetch(`${usedApiBase}/documents`, { method: 'POST', body: makeFormData(file) })
 
-      if (!response.ok && usedApiBase === API_PROXY && (response.status === 404 || response.status === 502)) {
+      if (!response.ok && usedApiBase === API_PROXY && API_DIRECT !== API_PROXY && (response.status === 404 || response.status === 502)) {
         usedApiBase = API_DIRECT
         response = await fetch(`${usedApiBase}/documents`, { method: 'POST', body: makeFormData(file) })
       }
@@ -623,7 +627,7 @@ function App() {
       if (!response.ok) {
         const detail = await response.json().catch(() => null)
         if (response.status === 404 || response.status === 502) {
-          throw new Error('API desconectada. Arranca con: npm run dev:all')
+          throw new Error(API_DOWN_MESSAGE)
         }
         throw new Error(detail?.detail ?? `No se pudo cargar el PDF (${response.status})`)
       }
@@ -642,7 +646,7 @@ function App() {
       setMessage(`${payload.pageCount} paginas, ${payload.pages.reduce((sum, page) => sum + page.text.length, 0)} textos`)
     } catch (error) {
       if (error instanceof TypeError) {
-        if (apiBase === API_PROXY) {
+        if (apiBase === API_PROXY && API_DIRECT !== API_PROXY) {
           try {
             const response = await fetch(`${API_DIRECT}/documents`, { method: 'POST', body: makeFormData(file) })
             if (response.ok) {
@@ -662,11 +666,11 @@ function App() {
               return
             }
           } catch {
-            setMessage('API desconectada. Arranca con: npm run dev:all')
+            setMessage(API_DOWN_MESSAGE)
             return
           }
         }
-        setMessage('API desconectada. Arranca con: npm run dev:all')
+        setMessage(API_DOWN_MESSAGE)
       } else {
         setMessage(error instanceof Error ? error.message : 'Error al cargar')
       }
